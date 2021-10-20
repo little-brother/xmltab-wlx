@@ -23,6 +23,7 @@
 #define WMU_SET_FONT           WM_USER + 6
 #define WMU_UPDATE_TEXT        WM_USER + 7
 #define WMU_UPDATE_HIGHLIGHT   WM_USER + 8
+#define WMU_SWITCH_TAB         WM_USER + 9
 
 #define IDC_MAIN               100
 #define IDC_TREE               101
@@ -37,6 +38,7 @@
 #define IDM_COPY_TEXT          5002
 #define IDM_SELECTALL          5003
 #define IDM_FORMAT             5004
+#define IDM_LOCATE             5005
 
 #define IDH_EXIT               6000
 #define IDH_NEXT               6001
@@ -48,13 +50,23 @@
 #define SB_ROW_COUNT           3
 #define SB_CURRENT_ROW         4
 
+#define SPLITTER_WIDTH         5
 #define MAX_LENGTH             4096
 #define MAX_HIGHLIGHT_LENGTH   64000
 #define APP_NAME               TEXT("xmltab")
 #define LOADING                TEXT("Loading...")
 
+#define XML_TEXT               "#TEXT"
+#define XML_COMMENT            "#COMMENT"
+#define XML_CDATA              "#CDATA"
+
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
+
+#define LCS_FINDFIRST          1
+#define LCS_MATCHCASE          2
+#define LCS_WHOLEWORDS         4
+#define LCS_BACKWARDS          8
 
 typedef struct {
 	int size;
@@ -73,6 +85,7 @@ void highlightText(HWND hWnd, TCHAR* text);
 char* formatXML(const char* data);
 void setStoredValue(TCHAR* name, int value);
 int getStoredValue(TCHAR* name, int defValue);
+TCHAR* getStoredString(TCHAR* name, TCHAR* defValue);
 int CALLBACK cbEnumTabStopChildren (HWND hWnd, LPARAM lParam);
 TCHAR* utf8to16(const char* in);
 char* utf16to8(const TCHAR* in);
@@ -101,6 +114,37 @@ void __stdcall ListSetDefaultParams(ListDefaultParamStruct* dps) {
 		DWORD size = MultiByteToWideChar(CP_ACP, 0, dps->DefaultIniName, -1, NULL, 0);
 		MultiByteToWideChar(CP_ACP, 0, dps->DefaultIniName, -1, iniPath, size);
 	}
+}
+
+int __stdcall ListSearchText(HWND hWnd, char* searchString, int searchParameter) {
+	HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
+	HWND hTextWnd = GetDlgItem(hTabWnd, IDC_TEXT);
+
+	DWORD len = MultiByteToWideChar(CP_ACP, 0, searchString, -1, NULL, 0);
+	TCHAR* searchString16 = (TCHAR*)calloc (len, sizeof (TCHAR));
+	MultiByteToWideChar(CP_ACP, 0, searchString, -1, searchString16, len);
+	
+	int spos = SendMessage(hTextWnd, EM_GETSEL, 0, 0);
+	int mode = 0;	
+	FINDTEXTEXW ft = {{HIWORD(spos), -1}, searchString16, {0, 0}};
+	if (searchParameter & LCS_MATCHCASE)
+		mode |= FR_MATCHCASE;
+	if (searchParameter & LCS_WHOLEWORDS)
+		mode |= FR_WHOLEWORD;
+	if (!(searchParameter & LCS_BACKWARDS)) 
+		mode |= FR_DOWN;
+	else 
+		ft.chrg.cpMin  = ft.chrg.cpMin > len ? ft.chrg.cpMin - len : ft.chrg.cpMin;
+
+	int pos = SendMessage(hTextWnd, EM_FINDTEXTEXW, mode, (LPARAM)&ft);	
+	if (pos != -1) 
+		SendMessage(hTextWnd, EM_SETSEL, pos, pos + _tcslen(searchString16));
+	else	
+		MessageBeep(0);
+	free(searchString16);	
+	SetFocus(hTextWnd);		
+	
+	return 0;
 }
 
 HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
@@ -167,14 +211,15 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 	SetProp(hMainWnd, TEXT("TOTALROWCOUNT"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("ORDERBY"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("COLNO"), calloc(1, sizeof(int)));
-	SetProp(hMainWnd, TEXT("SPLITTERWIDTH"), calloc(1, sizeof(int)));
+	SetProp(hMainWnd, TEXT("SPLITTERPOSITION"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("ISFORMAT"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("FONT"), 0);
+	SetProp(hMainWnd, TEXT("FONTFAMILY"), getStoredString(TEXT("font"), TEXT("Arial")));	
 	SetProp(hMainWnd, TEXT("FONTSIZE"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("GRAYBRUSH"), CreateSolidBrush(GetSysColor(COLOR_BTNFACE)));
 	SetProp(hMainWnd, TEXT("MAXHIGHLIGHTLENGTH"), calloc(1, sizeof(int)));	
 
-	*(int*)GetProp(hMainWnd, TEXT("SPLITTERWIDTH")) = getStoredValue(TEXT("splitter-width"), 200);
+	*(int*)GetProp(hMainWnd, TEXT("SPLITTERPOSITION")) = getStoredValue(TEXT("splitter-position"), 200);
 	*(int*)GetProp(hMainWnd, TEXT("FONTSIZE")) = getStoredValue(TEXT("font-size"), 16);
 	*(int*)GetProp(hMainWnd, TEXT("ISFORMAT")) = getStoredValue(TEXT("format"), 1);
 	*(int*)GetProp(hMainWnd, TEXT("MAXHIGHLIGHTLENGTH")) = getStoredValue(TEXT("max-highlight-length"), 64000);	
@@ -223,7 +268,8 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 	AppendMenu(hTextMenu, MF_STRING, IDM_COPY_TEXT, TEXT("Copy"));
 	AppendMenu(hTextMenu, MF_STRING, IDM_SELECTALL, TEXT("Select all"));
 	AppendMenu(hTextMenu, MF_STRING, 0, NULL);
-	AppendMenu(hTextMenu, MF_STRING | (*(int*)GetProp(hMainWnd, TEXT("ISFORMAT")) != 0 ? MF_CHECKED : 0), IDM_FORMAT, TEXT("Format"));	
+	AppendMenu(hTextMenu, MF_STRING | (*(int*)GetProp(hMainWnd, TEXT("ISFORMAT")) != 0 ? MF_CHECKED : 0), IDM_FORMAT, TEXT("Format"));
+	AppendMenu(hTextMenu, MF_STRING, IDM_LOCATE, TEXT("Locate"));		
 	SetProp(hMainWnd, TEXT("TEXTMENU"), hTextMenu);
 	
 	SendMessage(hMainWnd, WMU_SET_FONT, 0, 0);
@@ -232,11 +278,11 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 	SendMessage(hStatusWnd, SB_SETTEXT, SB_CODEPAGE, 
 		(LPARAM)(cp == CP_UTF8 ? TEXT("    UTF-8") : cp == CP_UTF16LE ? TEXT(" UTF-16LE") : cp == CP_UTF16BE ? TEXT(" UTF-16BE") : TEXT("     ANSI")));	
 	
-	xml_element* node = xml->first_child;
+	xml_element* node = xml->last_child;
 	while (node) {
 		HTREEITEM hItem = addNode(hTreeWnd, TVI_ROOT, node);	
-		TreeView_Expand(hTreeWnd, hItem, TVE_EXPAND);
-		node = node->next;
+		TreeView_Expand(hTreeWnd, hItem, TVE_EXPAND);		
+		node = node->prev;
 	}
 	
 	HTREEITEM hItem = TreeView_GetNextItem(hTreeWnd, TVI_ROOT, TVGN_CHILD);
@@ -251,7 +297,7 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 }
 
 void __stdcall ListCloseWindow(HWND hWnd) {
-	setStoredValue(TEXT("splitter-width"), *(int*)GetProp(hWnd, TEXT("SPLITTERWIDTH")));
+	setStoredValue(TEXT("splitter-position"), *(int*)GetProp(hWnd, TEXT("SPLITTERPOSITION")));
 	setStoredValue(TEXT("font-size"), *(int*)GetProp(hWnd, TEXT("FONTSIZE")));
 	setStoredValue(TEXT("format"), *(int*)GetProp(hWnd, TEXT("ISFORMAT")));	
 	setStoredValue(TEXT("tab-no"), TabCtrl_GetCurSel(GetDlgItem(hWnd, IDC_TAB)));
@@ -263,9 +309,10 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	free((int*)GetProp(hWnd, TEXT("TOTALROWCOUNT")));
 	free((int*)GetProp(hWnd, TEXT("ORDERBY")));
 	free((int*)GetProp(hWnd, TEXT("COLNO")));
-	free((int*)GetProp(hWnd, TEXT("SPLITTERWIDTH")));
+	free((int*)GetProp(hWnd, TEXT("SPLITTERPOSITION")));
 	free((int*)GetProp(hWnd, TEXT("ISFORMAT")));	
-	free((int*)GetProp(hWnd, TEXT("MAXHIGHLIGHTLENGTH")));		
+	free((int*)GetProp(hWnd, TEXT("MAXHIGHLIGHTLENGTH")));
+	free((TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));		
 
 	DeleteFont(GetProp(hWnd, TEXT("FONT")));
 	DeleteObject(GetProp(hWnd, TEXT("GRAYBRUSH")));
@@ -281,11 +328,13 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	RemoveProp(hWnd, TEXT("COLNO"));
 	RemoveProp(hWnd, TEXT("XML"));
 	RemoveProp(hWnd, TEXT("DATA"));	
-	RemoveProp(hWnd, TEXT("SPLITTERWIDTH"));
+	RemoveProp(hWnd, TEXT("SPLITTERPOSITION"));
 	RemoveProp(hWnd, TEXT("ISFORMAT"));
 	RemoveProp(hWnd, TEXT("MAXHIGHLIGHTLENGTH"));	
 	
 	RemoveProp(hWnd, TEXT("FONT"));
+	RemoveProp(hWnd, TEXT("FONTFAMILY"));	
+	RemoveProp(hWnd, TEXT("FONTSIZE"));	
 	RemoveProp(hWnd, TEXT("GRAYBRUSH"));
 	RemoveProp(hWnd, TEXT("DATAMENU"));
 	RemoveProp(hWnd, TEXT("TEXTMENU"));
@@ -298,8 +347,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 		case WM_HOTKEY: {
 			WPARAM id = wParam;
-			if (id == IDH_EXIT)
-				SendMessage(GetParent(hWnd), WM_CLOSE, 0, 0);
+			if (id == IDH_EXIT) 
+				SendMessage(GetAncestor(GetFocus(), GA_ROOT), WM_CLOSE, 0, 0);
 
 			if (id == IDH_NEXT || id == IDH_PREV) {
 				HWND hFocus = GetFocus();
@@ -328,20 +377,20 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			GetClientRect(hStatusWnd, &rc);
 			int statusH = rc.bottom;
 
-			int splitterW = *(int*)GetProp(hWnd, TEXT("SPLITTERWIDTH"));
+			int splitterW = *(int*)GetProp(hWnd, TEXT("SPLITTERPOSITION"));
 			GetClientRect(hWnd, &rc);
 			HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);
 			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
 			HWND hGridWnd = GetDlgItem(hTabWnd, IDC_GRID);
 			HWND hTextWnd = GetDlgItem(hTabWnd, IDC_TEXT);
 			SetWindowPos(hTreeWnd, 0, 0, 0, splitterW, rc.bottom - statusH, SWP_NOMOVE | SWP_NOZORDER);
-			SetWindowPos(hTabWnd, 0, splitterW + 5, 0, rc.right - splitterW - 5, rc.bottom - statusH, SWP_NOZORDER);
+			SetWindowPos(hTabWnd, 0, splitterW + SPLITTER_WIDTH, 0, rc.right - splitterW - SPLITTER_WIDTH, rc.bottom - statusH, SWP_NOZORDER);
 
 			RECT rc2;
 			GetClientRect(hTabWnd, &rc);
 			TabCtrl_GetItemRect(hTabWnd, 0, &rc2);
-			SetWindowPos(hTextWnd, 0, 2, rc2.bottom + 3, rc.right - rc.left - 5, rc.bottom - rc2.bottom - 7, SWP_NOZORDER);
-			SetWindowPos(hGridWnd, 0, 2, rc2.bottom + 3, rc.right - rc.left - 5, rc.bottom - rc2.bottom - 7, SWP_NOZORDER);
+			SetWindowPos(hTextWnd, 0, 2, rc2.bottom + 3, rc.right - rc.left - SPLITTER_WIDTH, rc.bottom - rc2.bottom - 7, SWP_NOZORDER);
+			SetWindowPos(hGridWnd, 0, 2, rc2.bottom + 3, rc.right - rc.left - SPLITTER_WIDTH, rc.bottom - rc2.bottom - 7, SWP_NOZORDER);
 		}
 		break;
 
@@ -351,7 +400,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			RECT rc;
 			GetClientRect(hWnd, &rc);
-			rc.left = *(int*)GetProp(hWnd, TEXT("SPLITTERWIDTH"));
+			rc.left = *(int*)GetProp(hWnd, TEXT("SPLITTERPOSITION"));
 			rc.right = rc.left + 5;
 			FillRect(hDC, &rc, (HBRUSH)GetProp(hWnd, TEXT("GRAYBRUSH")));
 			EndPaint(hWnd, &ps);
@@ -367,8 +416,12 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 
 		case WM_LBUTTONDOWN: {
-			SetProp(hWnd, TEXT("ISMOUSEDOWN"), (HANDLE)1);
-			SetCapture(hWnd);
+			int x = GET_X_LPARAM(lParam);
+			int pos = *(int*)GetProp(hWnd, TEXT("SPLITTERPOSITION"));
+			if (x >= pos || x <= pos + SPLITTER_WIDTH) {
+				SetProp(hWnd, TEXT("ISMOUSEDOWN"), (HANDLE)1);
+				SetCapture(hWnd);
+			}
 			return 0;
 		}
 		break;
@@ -385,7 +438,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			DWORD x = GET_X_LPARAM(lParam);
 			if (x > 0 && x < 32000)
-				*(int*)GetProp(hWnd, TEXT("SPLITTERWIDTH")) = x;
+				*(int*)GetProp(hWnd, TEXT("SPLITTERPOSITION")) = x;
 			SendMessage(hWnd, WM_SIZE, 0, 0);
 		}
 		break;
@@ -400,8 +453,19 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 		case WM_CONTEXTMENU: {
 			POINT p = {LOWORD(lParam), HIWORD(lParam)};
-			if (GetDlgCtrlID(WindowFromPoint(p)) == IDC_TEXT)
+			if (GetDlgCtrlID(WindowFromPoint(p)) == IDC_TEXT) {
+				HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
+				HWND hTextWnd = GetDlgItem(hTabWnd, IDC_TEXT);
+				ScreenToClient(hTextWnd, &p);
+				int pos = SendMessage(hTextWnd, EM_CHARFROMPOS, 0, (LPARAM)&p);
+				int start, end;
+				SendMessage(hTextWnd, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+				if (start == end || pos < start || pos > end)
+					SendMessage(hTextWnd, EM_SETSEL, pos, pos);
+				
+				ClientToScreen(hTextWnd, &p);
 				TrackPopupMenu(GetProp(hWnd, TEXT("TEXTMENU")), TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hWnd, NULL);
+			}
 		}
 		break;
 
@@ -464,6 +528,63 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				
 				SendMessage(hWnd, WMU_UPDATE_TEXT, 0, 0);
 			}
+			
+			if (cmd == IDM_LOCATE) {
+				HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);				
+				HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
+				HWND hTextWnd = GetDlgItem(hTabWnd, IDC_TEXT);
+				int pos16; 
+				SendMessage(hTextWnd, EM_GETSEL, (WPARAM)&pos16, 0);
+
+				GETTEXTLENGTHEX gtl = {GTL_NUMBYTES, 0};
+				int len = SendMessage(hTextWnd, EM_GETTEXTLENGTHEX, (WPARAM)&gtl, 1200);
+				TCHAR* xml16 = calloc(len + sizeof(TCHAR), sizeof(char));
+				GETTEXTEX gt = {0};
+				gt.cb = len + sizeof(TCHAR);
+				gt.flags = 0;
+				gt.codepage = 1200;
+				SendMessage(hTextWnd, EM_GETTEXTEX, (WPARAM)&gt, (LPARAM)xml16);
+																							
+				char* xml8 = utf16to8(xml16);			
+				char* xml8_ = utf16to8(xml16 + pos16);
+				int pos8 = strlen(xml8) - strlen(xml8_);
+				free(xml8_);
+								
+				xml_element* xml = xml_parse(xml8);
+				xml_element* node = xml->first_child;
+				HTREEITEM hItem = TreeView_GetSelection(hTreeWnd);				
+				
+				while (node) {
+					if (node->next && node->next->offset < pos8)  {
+						node = node->next;
+						if (node->key || node->value && !isEmpty(node->value)) 
+							hItem = TreeView_GetNextSibling(hTreeWnd, hItem) ? : hItem;
+						
+						continue;
+					} 
+					
+					if (node->first_child && node->first_child->offset < pos8) {
+						node = node->first_child;
+						TreeView_Expand(hTreeWnd, hItem, TVE_EXPAND);
+						while (!(node->key || node->value && !isEmpty(node->value)))
+							node = node->next;
+						hItem = TreeView_GetChild(hTreeWnd, hItem) ? : hItem;						
+						
+						continue;
+					} 
+					
+					break;
+				}
+																
+				xml_free(xml);
+				free(xml8);
+				free(xml16);
+				
+				if (hItem)
+					TreeView_SelectItem(hTreeWnd, hItem);
+				else
+					MessageBeep(0);	
+			}
 		}
 		break;
 
@@ -494,10 +615,10 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						TreeView_DeleteItem(hTreeWnd, hChild);
 						
 						xml_element* node = (xml_element*)TreeView_GetItemParam(hTreeWnd, hItem);
-						xml_element* subnode = node != NULL ? node->first_child : 0; 
+						xml_element* subnode = node != NULL ? node->last_child : 0; 
 						while (subnode) {
 							addNode(hTreeWnd, hItem, subnode);	
-							subnode = subnode->next;
+							subnode = subnode->prev;
 						}
 					}
 				}
@@ -547,6 +668,32 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (kd->wVKey == 0x43 && GetKeyState(VK_CONTROL)) // Ctrl + C
 					SendMessage(hWnd, WM_COMMAND, IDM_COPY_ROW, 0);
 			}
+			
+			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_DBLCLK) {
+				NMITEMACTIVATE* ia = (NMITEMACTIVATE*) lParam;
+				if (ia->iItem == -1)	
+					return 0;
+					
+				TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
+				int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
+				
+				HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);
+				HTREEITEM hItem = TreeView_GetSelection(hTreeWnd);
+				hItem = TreeView_GetChild(hTreeWnd, hItem);
+				for (int i = 0; i < resultset[ia->iItem]; i++)
+					hItem = TreeView_GetNextSibling(hTreeWnd, hItem);
+								
+				if (hItem != 0)	{
+					int rowNo = resultset[ia->iItem];
+					TCHAR* key = cache[rowNo][0]; 
+					if (_tcscmp(key, TEXT(XML_TEXT)) == 0 || _tcscmp(key, TEXT(XML_COMMENT)) == 0 || _tcscmp(key, TEXT(XML_CDATA)) == 0)
+						SendMessage(hWnd, WMU_SWITCH_TAB, 1, 0);
+
+					TreeView_SelectItem(hTreeWnd, hItem);
+				} else {
+					MessageBeep(0);	
+				}
+			}			
 
 			if (pHdr->code == HDN_ITEMCHANGED && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(GetDlgItem(hWnd, IDC_TAB), IDC_GRID)))
 				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
@@ -561,6 +708,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			HTREEITEM hItem = TreeView_GetSelection(hTreeWnd);			
 			xml_element* node = (xml_element*)TreeView_GetItemParam(hTreeWnd, hItem);
+			if (!node)
+				return 0;
 
 			HWND hHeader = ListView_GetHeader(hGridWnd);
 			SendMessage(hWnd, WMU_RESET_CACHE, 0, 0);
@@ -712,22 +861,22 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							int len = strlen(subnode->key);
 							char* buf = calloc(len + 1, sizeof(char));
 							sprintf(buf, "%.*s", len - strlen("![CDATA[]]>"), subnode->key + 8);
-							cache[rowNo][0] = utf8to16("[CDATA]");
+							cache[rowNo][0] = utf8to16(XML_CDATA);
 							cache[rowNo][1] = utf8to16(buf);
 							free(buf);
 						} else if (strncmp(subnode->key, "!--", 3) == 0) {
 							int len = strlen(subnode->key);
 							char* buf = calloc(len + 1, sizeof(char));
 							sprintf(buf, "%.*s", len - strlen("!----"), subnode->key + 3);
-							cache[rowNo][0] = utf8to16("[COMMENT]");
+							cache[rowNo][0] = utf8to16(XML_COMMENT);
 							cache[rowNo][1] = utf8to16(buf);
 							free(buf);
 						} else {
 							cache[rowNo][0] = utf8to16(subnode->key);
 							cache[rowNo][1] = utf8to16(xml_content(subnode));						
 						}
-					} else {
-						cache[rowNo][0] = utf8to16("[TEXT]");
+					} else if (subnode->value && !isEmpty(subnode->value)) {
+						cache[rowNo][0] = utf8to16(XML_TEXT);
 						cache[rowNo][1] = utf8to16(subnode->value);					
 					}
 					
@@ -872,6 +1021,9 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		
 			HTREEITEM hItem = TreeView_GetSelection(hTreeWnd);			
 			xml_element* node = (xml_element*)TreeView_GetItemParam(hTreeWnd, hItem);
+			if (!node)
+				return 0;
+			
 			char* text8 = calloc(node->length + 1, sizeof(char));
 			strncpy(text8, data + node->offset, node->length);
 			
@@ -880,9 +1032,10 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				free(text8);
 				text8 = ftext8;
 			}
+			
 			TCHAR* text16 = utf8to16(text8);
 			free(text8);
-			
+						
 			LockWindowUpdate(hTextWnd);
 			SendMessage(hTextWnd, EM_EXLIMITTEXT, 0, _tcslen(text16) + 1);
 			SetWindowText(hTextWnd, text16);
@@ -1023,7 +1176,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			*pFontSize += wParam;
 			DeleteFont(GetProp(hWnd, TEXT("FONT")));
 
-			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, TEXT("Arial"));
+			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, (TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));
 			HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);
 			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
 			HWND hGridWnd = GetDlgItem(hTabWnd, IDC_GRID);
@@ -1041,6 +1194,15 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			PostMessage(hWnd, WMU_UPDATE_HIGHLIGHT, 0, 0);
 			PostMessage(hWnd, WMU_AUTO_COLUMN_SIZE, 0, 0);
+		}
+		break;
+		
+		// wParam = tab index
+		case WMU_SWITCH_TAB: {
+			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
+			TabCtrl_SetCurSel(hTabWnd, wParam);
+			NMHDR Hdr = {hTabWnd, IDC_TAB, TCN_SELCHANGE};
+			SendMessage(hWnd, WM_NOTIFY, IDC_TAB, (LPARAM)&Hdr);
 		}
 		break;
 
@@ -1111,7 +1273,12 @@ LRESULT CALLBACK cbNewText(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		SendMessage(GetParent(hTabWnd), msg, wParam, lParam);
 		return 0;
 	}
-
+	
+	if (msg == WM_KEYDOWN && (wParam == VK_F3 || wParam == VK_F5 || wParam == VK_F7 || HIWORD(GetKeyState(VK_CONTROL)) && wParam == 0x46)) { // Ctrl + F
+		SendMessage(GetAncestor(hWnd, GA_ROOT), WM_KEYDOWN, wParam, lParam);
+		return 0;
+	}
+	
 	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
 }
 
@@ -1122,12 +1289,12 @@ HTREEITEM addNode(HWND hTreeWnd, HTREEITEM hParentItem, xml_element* node) {
 	HTREEITEM hItem = 0;	
 	xml_element* subnode = node->first_child;
 	if (node->key) {
-		const char* value = node->value ? node->value : subnode && !subnode->key ? subnode->value : 0;
+		const char* value = node->value ? node->value : node->child_count == 1 && subnode && !subnode->key ? subnode->value : 0;
 		char* buf8 = calloc(strlen(node->key) + (value ? strlen(value) : 0) + 10, sizeof(char));
 		if (node->key && strncmp(node->key, "![CDATA[", 8) == 0) {
-			sprintf(buf8, "#CDATA (%.2fKb)", strlen(node->key)/1024.0);
+			sprintf(buf8, "%s (%.2fKb)", XML_CDATA, strlen(node->key)/1024.0);
 		} else if (node->key && strncmp(node->key, "!--", 3) == 0) {
-			sprintf(buf8, "#COMMENT");
+			sprintf(buf8, XML_COMMENT);
 		} else if (!isEmpty(value)) {
 			sprintf(buf8, "%s = %s", node->key, value);
 		} else {
@@ -1138,6 +1305,8 @@ HTREEITEM addNode(HWND hTreeWnd, HTREEITEM hParentItem, xml_element* node) {
 		hItem = TreeView_AddItem(hTreeWnd, name16, hParentItem, (LPARAM)node);	
 		free(name16);
 		free(buf8);
+	} else if (node->value && !isEmpty(node->value)) {
+		hItem = TreeView_AddItem(hTreeWnd, TEXT(XML_TEXT), hParentItem, (LPARAM)node);		
 	}
 	
 	BOOL hasSubnode = FALSE;
@@ -1227,6 +1396,7 @@ char* formatXML(const char* data) {
 	BOOL isValue = FALSE;
 	char quote = 0;
 	BOOL isOpenTag = FALSE;
+	BOOL isCData = FALSE;	
 
 	int bPos = 0;
 	int pos = 0;
@@ -1239,8 +1409,12 @@ char* formatXML(const char* data) {
 		BOOL isSave = FALSE;
 		BOOL isSpace = FALSE;
 		BOOL isNun = strchr(" \t\r\n", c) != 0;
+		BOOL isCDataStart = FALSE;
 
-		if (1000 == 1000 && quote && c != quote) {
+		if (1000 == 1000 && isCData) {
+			isSave = TRUE; 	
+			isCData = !(data[pos - 2] == ']' && data[pos - 1] == ']' && c == '>');
+		} else if (quote && c != quote) {
 			isSave = TRUE;
 		} else if (quote && c == quote) {
 			isSave = TRUE;
@@ -1250,6 +1424,8 @@ char* formatXML(const char* data) {
 			isSave = TRUE;
 			isValue = FALSE;
 			isOpenTag = n != '/';
+			isCDataStart = strncmp(data + pos, "<![CDATA[", 9) == 0; 
+			isCData = isCDataStart;
 			if (!isOpenTag)
 				level--;
 		} else if (inTag && c == '>') {
@@ -1260,13 +1436,16 @@ char* formatXML(const char* data) {
 			if (p == '/' || p == '-')
 				level--;
 			quote = 0;
+		} else if (inTag && c == '=') {
+			isSave = TRUE;
+			isSpace = TRUE;
 		} else if (inTag && !isNun) {
 			isSave = TRUE;
-			isSpace = !isAttr && p != '<' && p != '/';
+			isSpace = !isAttr && p != '<' && p != '/' || p == '=';
 			isAttr = TRUE;
 		} else if (inTag && isNun) {
 			isAttr = FALSE;
-		} else if (!inTag && p == '>'){
+		} else if (!inTag && p == '>') {
 			isValue = FALSE;
 			isSave = !isNun;
 		} else if (!inTag && !isValue && !isNun) {
@@ -1284,7 +1463,7 @@ char* formatXML(const char* data) {
 			}
 		}
 
-		if (isSave && bPos > 0 && (c == '<' || p == '>')) {
+		if (isSave && bPos > 0 && !quote && (c == '<' || isCDataStart || p == '>' && !isCData)) {
 			buf[bPos] = '\n';
 			bPos++;
 
@@ -1309,7 +1488,7 @@ char* formatXML(const char* data) {
 			}
 		}
 
-		if (c == '<' && isOpenTag)
+		if (c == '<' && isOpenTag && !isCData)
 			level++;
 
 		pos++;
@@ -1328,6 +1507,13 @@ void setStoredValue(TCHAR* name, int value) {
 int getStoredValue(TCHAR* name, int defValue) {
 	TCHAR buf[128];
 	return GetPrivateProfileString(APP_NAME, name, NULL, buf, 128, iniPath) ? _ttoi(buf) : defValue;
+}
+
+TCHAR* getStoredString(TCHAR* name, TCHAR* defValue) { 
+	TCHAR* buf = calloc(256, sizeof(TCHAR));
+	if (0 == GetPrivateProfileString(APP_NAME, name, NULL, buf, 128, iniPath) && defValue)
+		_tcsncpy(buf, defValue, 255);
+	return buf;	
 }
 
 int CALLBACK cbEnumTabStopChildren (HWND hWnd, LPARAM lParam) {
@@ -1402,7 +1588,7 @@ BOOL isNumber(const TCHAR* val) {
 BOOL isEmpty (const char* s) {
 	BOOL res = TRUE;
 	for (int i = 0; s && res && i < strlen(s); i++)
-		res = !isgraph(s[i]);	
+		res = strchr(" \t\n\r", s[i]) != NULL;	
 		
 	return res;	
 }
@@ -1455,7 +1641,7 @@ HTREEITEM TreeView_AddItem (HWND hTreeWnd, TCHAR* caption, HTREEITEM parent, LPA
 	tvi.lParam = lParam;
 
 	tvins.item = tvi;
-	tvins.hInsertAfter = TVI_LAST;
+	tvins.hInsertAfter = TVI_FIRST;
 	tvins.hParent = parent;
 	return (HTREEITEM)SendMessage(hTreeWnd, TVM_INSERTITEM, 0, (LPARAM)(LPTVINSERTSTRUCT)&tvins);
 };

@@ -11,6 +11,9 @@ typedef struct xml_attribute {
 
 	/* Pointer to next argument. May be NULL. */
 	struct xml_attribute *next;
+
+	/* Pointer to prev argument. May be NULL. */
+	struct xml_attribute *prev;
 } xml_attribute;
 
 typedef struct xml_element {
@@ -36,6 +39,9 @@ typedef struct xml_element {
 
 	/* Pointer to next sibling. May be NULL. */
 	struct xml_element *next;
+	
+	/* Pointer to prev sibling. May be NULL. */
+	struct xml_element *prev;	
 	
 	/* Added: child count, XML offset and XML length */
 	int child_count;

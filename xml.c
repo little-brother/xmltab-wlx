@@ -139,6 +139,7 @@ static void xml_element_add(
 	c->parent = p;
 
 	if (p->first_child) {
+		c->prev = p->last_child;
 		p->last_child->next = c;
 		p->last_child = c;
 	} else {
@@ -182,6 +183,7 @@ static void xml_attribute_add(
 		struct xml_element *e,
 		struct xml_attribute *a) {
 	if (e->first_attribute) {
+		a->prev = e->last_attribute;
 		e->last_attribute->next = a;
 		e->last_attribute = a;
 	} else {
@@ -376,6 +378,8 @@ static const char *xml_parse_content(struct xml_state *, const char *);
  */
 static void xml_close_element(struct xml_state *st, const char* d) {
 	st->current->length = d - st->data - st->current->offset;
+	if (st->current->length > 0 && ((d - 1)[0] != '>'))
+		st->current->length--;
 	st->current = st->current->parent;
 }
 
