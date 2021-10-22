@@ -40,10 +40,6 @@
 #define IDM_FORMAT             5004
 #define IDM_LOCATE             5005
 
-#define IDH_EXIT               6000
-#define IDH_NEXT               6001
-#define IDH_PREV               6002
-
 #define SB_UNUSED              0
 #define SB_CODEPAGE            1
 #define SB_MODE                2
@@ -80,6 +76,7 @@ static TCHAR iniPath[MAX_PATH] = {0};
 LRESULT CALLBACK cbNewMain (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewText(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HTREEITEM addNode(HWND hTreeWnd, HTREEITEM hParentItem, xml_element* val);
 void highlightText(HWND hWnd, TCHAR* text);
 char* formatXML(const char* data);
@@ -230,9 +227,11 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 
 	HWND hTreeWnd = CreateWindow(WC_TREEVIEW, NULL, WS_VISIBLE | WS_CHILD | TVS_HASBUTTONS | TVS_HASLINES | TVS_SHOWSELALWAYS | WS_TABSTOP,
 		0, 0, 100, 100, hMainWnd, (HMENU)IDC_TREE, GetModuleHandle(0), NULL);
+	SetProp(hTreeWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTreeWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));	
 
 	HWND hTabWnd = CreateWindow(WC_TABCONTROL, NULL, WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | WS_TABSTOP, 100, 100, 100, 100,
 		hMainWnd, (HMENU)IDC_TAB, GetModuleHandle(0), NULL);
+	SetProp(hTabWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTabWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));	
 
 	TCITEM tci;
 	tci.mask = TCIF_TEXT | TCIF_IMAGE;
@@ -249,6 +248,7 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 	HWND hGridWnd = CreateWindow(WC_LISTVIEW, NULL, (tabNo == 0 ? WS_VISIBLE : 0) | WS_CHILD  | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | LVS_OWNERDATA | WS_TABSTOP,
 		205, 0, 100, 100, hTabWnd, (HMENU)IDC_GRID, GetModuleHandle(0), NULL);
 	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
+	SetProp(hGridWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hGridWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));
 
 	HWND hHeader = ListView_GetHeader(hGridWnd);
 	LONG_PTR styles = GetWindowLongPtr(hHeader, GWL_STYLE);
@@ -287,10 +287,6 @@ HWND APIENTRY ListLoad (HWND hListerWnd, char* fileToLoad, int showFlags) {
 	
 	HTREEITEM hItem = TreeView_GetNextItem(hTreeWnd, TVI_ROOT, TVGN_CHILD);
 	TreeView_Select(hTreeWnd, hItem, TVGN_CARET);
-
-	RegisterHotKey(hMainWnd, IDH_EXIT, 0, VK_ESCAPE);
-	RegisterHotKey(hMainWnd, IDH_NEXT, 0, VK_TAB);
-	RegisterHotKey(hMainWnd, IDH_PREV, MOD_CONTROL, VK_TAB);
 	SetFocus(hTreeWnd);
 
 	return hMainWnd;
@@ -345,31 +341,6 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 
 LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
-		case WM_HOTKEY: {
-			WPARAM id = wParam;
-			if (id == IDH_EXIT) 
-				SendMessage(GetAncestor(GetFocus(), GA_ROOT), WM_CLOSE, 0, 0);
-
-			if (id == IDH_NEXT || id == IDH_PREV) {
-				HWND hFocus = GetFocus();
-				HWND wnds[1000] = {0};
-				EnumChildWindows(hWnd, (WNDENUMPROC)cbEnumTabStopChildren, (LPARAM)wnds);
-
-				int no = 0;
-				while(wnds[no] && wnds[no] != hFocus)
-					no++;
-
-				int cnt = no;
-				while(wnds[cnt])
-					cnt++;
-
-				BOOL isBackward = id == IDH_PREV;
-				no += isBackward ? -1 : 1;
-				SetFocus(wnds[no] && no >= 0 ? wnds[no] : (isBackward ? wnds[cnt - 1] : wnds[0]));
-			}
-		}
-		break;
-
 		case WM_SIZE: {
 			HWND hStatusWnd = GetDlgItem(hWnd, IDC_STATUSBAR);
 			SendMessage(hStatusWnd, WM_SIZE, 0, 0);
@@ -450,7 +421,31 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 		}
 		break;
+		
+		case WM_KEYDOWN: {
+			if (wParam == VK_ESCAPE)
+				SendMessage(GetParent(hWnd), WM_CLOSE, 0, 0);
 
+			if (wParam == VK_TAB) {
+				HWND hFocus = GetFocus();
+				HWND wnds[1000] = {0};
+				EnumChildWindows(hWnd, (WNDENUMPROC)cbEnumTabStopChildren, (LPARAM)wnds);
+
+				int no = 0;
+				while(wnds[no] && wnds[no] != hFocus)
+					no++;
+
+				int cnt = no;
+				while(wnds[cnt])
+					cnt++;
+
+				BOOL isBackward = HIWORD(GetKeyState(VK_CONTROL));
+				no += isBackward ? -1 : 1;
+				SetFocus(wnds[no] && no >= 0 ? wnds[no] : (isBackward ? wnds[cnt - 1] : wnds[0]));
+			}
+		}
+		break;
+		
 		case WM_CONTEXTMENU: {
 			POINT p = {LOWORD(lParam), HIWORD(lParam)};
 			if (GetDlgCtrlID(WindowFromPoint(p)) == IDC_TEXT) {
@@ -1233,25 +1228,24 @@ LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 		}
 		break;
 
-		// Prevent beep
 		case WM_CHAR: {
-			if (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_TAB)
-				return 0;
+			return CallWindowProc(cbHotKey, hWnd, msg, wParam, lParam);
 		}
 		break;
 
 		case WM_KEYDOWN: {
-			if (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_TAB) {
-				if (wParam == VK_RETURN) {
-					HWND hHeader = GetParent(hWnd);
-					HWND hGridWnd = GetParent(hHeader);
-					HWND hTabWnd = GetParent(hGridWnd);
-					HWND hMainWnd = GetParent(hTabWnd);
-					SendMessage(hMainWnd, WMU_UPDATE_RESULTSET, 0, 0);
-				}
-
-				return 0;
+			if (wParam == VK_RETURN) {
+				HWND hHeader = GetParent(hWnd);
+				HWND hGridWnd = GetParent(hHeader);
+				HWND hTabWnd = GetParent(hGridWnd);
+				HWND hMainWnd = GetParent(hTabWnd);
+				SendMessage(hMainWnd, WMU_UPDATE_RESULTSET, 0, 0);
+				
+				return 0;			
 			}
+			
+			if (wParam == VK_TAB || wParam == VK_ESCAPE)
+				return CallWindowProc(cbHotKey, hWnd, msg, wParam, lParam);
 		}
 		break;
 
@@ -1278,6 +1272,26 @@ LRESULT CALLBACK cbNewText(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		SendMessage(GetAncestor(hWnd, GA_ROOT), WM_KEYDOWN, wParam, lParam);
 		return 0;
 	}
+	
+	if (msg == WM_KEYDOWN && (wParam == VK_TAB || wParam == VK_ESCAPE)) { 
+		return CallWindowProc(cbHotKey, hWnd, msg, wParam, lParam);
+	}	
+	
+	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_KEYDOWN && (wParam == VK_TAB || wParam == VK_ESCAPE)) {
+		HWND hMainWnd = hWnd;
+		while (hMainWnd && GetDlgCtrlID(hMainWnd) != IDC_MAIN)
+			hMainWnd = GetParent(hMainWnd);
+		SendMessage(hMainWnd, WM_KEYDOWN, wParam, lParam);
+		return 0;
+	}
+	
+	// Prevent beep
+	if (msg == WM_CHAR && (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_TAB))
+		return 0;
 	
 	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
 }
