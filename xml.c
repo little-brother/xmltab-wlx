@@ -773,7 +773,7 @@ static size_t xml_content_len(struct xml_element *e) {
 
 	for (e = e->first_child; e; e = e->next) {
 		if (e->value) {
-			s += strlen(e->value);
+			s += strlen(e->value) + 1; // space
 		} else {
 			s += xml_content_len(e);
 		}
@@ -791,8 +791,18 @@ static size_t xml_content_len(struct xml_element *e) {
 static void xml_content_cpy(struct xml_element *e, char **t) {
 	for (e = e->first_child; e; e = e->next) {
 		if (e->value) {
-			strcpy(*t, e->value);
-			*t += strlen(e->value);
+			int start = strspn(e->value, WHITESPACE);
+			int len = strlen(e->value + start);
+			while (len > 0 && strchr(WHITESPACE, (e->value + start)[len - start - 1]))
+				len--;
+				
+			// trim value + space
+			if (len) {	
+				strncpy(*t, e->value + start, len);
+				*t += len;
+				**t = ' ';
+				*t += 1; 
+			}
 		} else {
 			xml_content_cpy(e, t);
 		}
@@ -811,7 +821,7 @@ char *xml_content(struct xml_element *e) {
 
 	if (!e ||
 			(l = xml_content_len(e)) < 1 ||
-			!(s = malloc(++l))) {
+			!(s = calloc(l + 1, sizeof(char)))) {
 		return NULL;
 	}
 
