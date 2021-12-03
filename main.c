@@ -22,12 +22,13 @@
 #define WMU_UPDATE_FILTER_SIZE WM_USER + 3
 #define WMU_SET_HEADER_FILTERS WM_USER + 4
 #define WMU_AUTO_COLUMN_SIZE   WM_USER + 5
-#define WMU_RESET_CACHE        WM_USER + 6
-#define WMU_SET_FONT           WM_USER + 7
-#define WMU_SET_THEME          WM_USER + 8
-#define WMU_UPDATE_TEXT        WM_USER + 9
-#define WMU_UPDATE_HIGHLIGHT   WM_USER + 10
-#define WMU_SWITCH_TAB         WM_USER + 11
+#define WMU_SET_CURRENT_CELL   WM_USER + 6
+#define WMU_RESET_CACHE        WM_USER + 7
+#define WMU_SET_FONT           WM_USER + 8
+#define WMU_SET_THEME          WM_USER + 9
+#define WMU_UPDATE_TEXT        WM_USER + 10
+#define WMU_UPDATE_HIGHLIGHT   WM_USER + 11
+#define WMU_SWITCH_TAB         WM_USER + 12
 
 #define IDC_MAIN               100
 #define IDC_TREE               101
@@ -38,9 +39,10 @@
 #define IDC_HEADER_EDIT        1000
 
 #define IDM_COPY_CELL          5000
-#define IDM_COPY_ROW           5001
-#define IDM_FILTER_ROW         5002
-#define IDM_DARK_THEME         5003
+#define IDM_COPY_ROWS          5001
+#define IDM_COPY_COLUMN        5002
+#define IDM_FILTER_ROW         5003
+#define IDM_DARK_THEME         5004
 #define IDM_COPY_TEXT          5010
 #define IDM_SELECTALL          5011
 #define IDM_FORMAT             5012
@@ -51,14 +53,14 @@
 #define SB_RESERVED            2
 #define SB_MODE                3
 #define SB_ROW_COUNT           4
-#define SB_CURRENT_ROW         5
+#define SB_CURRENT_CELL        5
 #define SB_AUXILIARY           6
 
 #define SPLITTER_WIDTH         5
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("0.9.4")
+#define APP_VERSION            TEXT("0.9.5")
 #define LOADING                TEXT("Loading...")
 
 #define XML_TEXT               "#TEXT"
@@ -85,6 +87,7 @@ static TCHAR iniPath[MAX_PATH] = {0};
 LRESULT CALLBACK cbNewMain (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewHeader(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK cbNewTab(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewText(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 HTREEITEM addNode(HWND hTreeWnd, HTREEITEM hParentItem, xml_element* val);
@@ -164,47 +167,59 @@ int __stdcall ListSearchTextW(HWND hWnd, TCHAR* searchString, int searchParamete
 		HWND hStatusWnd = GetDlgItem(hWnd, IDC_STATUSBAR);	
 		
 		TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
+		int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
 		int rowCount = *(int*)GetProp(hWnd, TEXT("ROWCOUNT"));
 		int colCount = Header_GetItemCount(ListView_GetHeader(hGridWnd));
-			
+		if (!resultset || rowCount == 0)
+			return 0;
+	
+		BOOL isFindFirst = searchParameter & LCS_FINDFIRST;		
 		BOOL isBackward = searchParameter & LCS_BACKWARDS;
 		BOOL isMatchCase = searchParameter & LCS_MATCHCASE;
 		BOOL isWholeWords = searchParameter & LCS_WHOLEWORDS;	
-			
-		int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
-		if (rowNo == -1)
-			rowNo = isBackward ? rowCount - 1 : 0;
-			
-		int* pColNo = (int*)GetProp(hWnd, TEXT("SEARCHCOLNO"));
 	
+		if (isFindFirst) {
+			*(int*)GetProp(hWnd, TEXT("CURRENTCOLNO")) = 0;
+			*(int*)GetProp(hWnd, TEXT("SEARCHCELLPOS")) = 0;	
+			*(int*)GetProp(hWnd, TEXT("CURRENTROWNO")) = isBackward ? rowCount - 1 : 0;
+		}	
+			
+		int rowNo = *(int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
+		int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+		int *pStartPos = (int*)GetProp(hWnd, TEXT("SEARCHCELLPOS"));	
+		rowNo = rowNo == -1 || rowNo >= rowCount ? 0 : rowNo;
+		colNo = colNo == -1 || colNo >= colCount ? 0 : colNo;	
+				
 		int pos = -1;
 		do {
-			int colNo = *pColNo;
-			for (; (pos == -1) && colNo < colCount; colNo++) 
-				pos = findString(cache[rowNo][colNo], searchString, isMatchCase, isWholeWords);
-			*pColNo = pos != -1 ? colNo - 1 : 0;
-			rowNo += (pos == -1) && (isBackward ? -1 : 1); 	
+			for (; (pos == -1) && colNo < colCount; colNo++) {
+				pos = findString(cache[resultset[rowNo]][colNo] + *pStartPos, searchString, isMatchCase, isWholeWords);
+				if (pos != -1) 
+					pos += *pStartPos;				
+				*pStartPos = pos == -1 ? 0 : pos + *pStartPos + _tcslen(searchString);
+			}
+			colNo = pos != -1 ? colNo - 1 : 0;
+			rowNo += pos != -1 ? 0 : isBackward ? -1 : 1; 	
 		} while ((pos == -1) && (isBackward ? rowNo > 0 : rowNo < rowCount - 1));
+		ListView_SetItemState(hGridWnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 	
 		TCHAR buf[256] = {0};
 		if (pos != -1) {
 			ListView_EnsureVisible(hGridWnd, rowNo, FALSE);
 			ListView_SetItemState(hGridWnd, rowNo, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 			
-			TCHAR colName[MAX_COLUMN_LENGTH + 1];
-			Header_GetItemText(ListView_GetHeader(hGridWnd), *pColNo, colName, MAX_COLUMN_LENGTH);
-			TCHAR* val = cache[rowNo][*pColNo];
+			TCHAR* val = cache[resultset[rowNo]][colNo];
 			int len = _tcslen(searchString);
-			_sntprintf(buf, 255, TEXT("%ls: %ls%.*ls%ls"), colName, 
-				pos >= 10 ? TEXT("...") : TEXT(""), 
-				len + (pos < 10 ? pos : 10) + 10, pos < 10 ? val : val + pos - 10,
+			_sntprintf(buf, 255, TEXT("%ls%.*ls%ls"),
+				pos > 0 ? TEXT("...") : TEXT(""), 
+				len + pos + 10, val + pos,
 				_tcslen(val + pos + len) > 10 ? TEXT("...") : TEXT(""));
-			*pColNo += 1;
+			SendMessage(hWnd, WMU_SET_CURRENT_CELL, rowNo, colNo);
 		} else { 
 			MessageBox(hWnd, searchString, TEXT("Not found:"), MB_OK);
 		}
 		SendMessage(hStatusWnd, SB_SETTEXT, SB_AUXILIARY, (LPARAM)buf);	
-		SetFocus(hGridWnd);	
+		SetFocus(hGridWnd);
 	}
 
 	return 0;
@@ -282,8 +297,9 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hMainWnd, TEXT("ROWCOUNT"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("TOTALROWCOUNT"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("ORDERBY"), calloc(1, sizeof(int)));
-	SetProp(hMainWnd, TEXT("COLNO"), calloc(1, sizeof(int)));
-	SetProp(hMainWnd, TEXT("SEARCHCOLNO"), calloc(1, sizeof(int)));	
+	SetProp(hMainWnd, TEXT("CURRENTROWNO"), calloc(1, sizeof(int)));	
+	SetProp(hMainWnd, TEXT("CURRENTCOLNO"), calloc(1, sizeof(int)));
+	SetProp(hMainWnd, TEXT("SEARCHCELLPOS"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("SPLITTERPOSITION"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("ISFORMAT"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("FONT"), 0);
@@ -295,8 +311,10 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hMainWnd, TEXT("DARKTHEME"), calloc(1, sizeof(int)));			
 	SetProp(hMainWnd, TEXT("TEXTCOLOR"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("BACKCOLOR"), calloc(1, sizeof(int)));
+	SetProp(hMainWnd, TEXT("BACKCOLOR2"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("FILTERTEXTCOLOR"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("FILTERBACKCOLOR"), calloc(1, sizeof(int)));	
+	SetProp(hMainWnd, TEXT("CURRENTCELLCOLOR"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("SPLITTERCOLOR"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("XMLTEXTCOLOR"), calloc(1, sizeof(int)));		
 	SetProp(hMainWnd, TEXT("XMLTAGCOLOR"), calloc(1, sizeof(int)));
@@ -326,7 +344,7 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 
 	HWND hTabWnd = CreateWindow(WC_TABCONTROL, NULL, WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | WS_TABSTOP, 100, 100, 100, 100,
 		hMainWnd, (HMENU)IDC_TAB, GetModuleHandle(0), NULL);
-	SetProp(hTabWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTabWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));	
+	SetProp(hTabWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTabWnd, GWLP_WNDPROC, (LONG_PTR)cbNewTab));	
 
 	TCITEM tci;
 	tci.mask = TCIF_TEXT | TCIF_IMAGE;
@@ -340,7 +358,7 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	TabCtrl_InsertItem(hTabWnd, 1, &tci);
 
 	int tabNo = getStoredValue(TEXT("tab-no"), 0);
-	HWND hGridWnd = CreateWindow(WC_LISTVIEW, NULL, (tabNo == 0 ? WS_VISIBLE : 0) | WS_CHILD  | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | LVS_OWNERDATA | WS_TABSTOP,
+	HWND hGridWnd = CreateWindow(WC_LISTVIEW, NULL, (tabNo == 0 ? WS_VISIBLE : 0) | WS_CHILD  | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_OWNERDATA | WS_TABSTOP,
 		205, 0, 100, 100, hTabWnd, (HMENU)IDC_GRID, GetModuleHandle(0), NULL);
 	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
 	SetProp(hGridWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hGridWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));
@@ -356,13 +374,14 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hTextWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTextWnd, GWLP_WNDPROC, (LONG_PTR)cbNewText));
 	TabCtrl_SetCurSel(hTabWnd, tabNo);
 
-	HMENU hDataMenu = CreatePopupMenu();
-	AppendMenu(hDataMenu, MF_STRING, IDM_COPY_CELL, TEXT("Copy cell"));
-	AppendMenu(hDataMenu, MF_STRING, IDM_COPY_ROW, TEXT("Copy row"));
-	AppendMenu(hDataMenu, MF_STRING, 0, NULL);
-	AppendMenu(hDataMenu, (*(int*)GetProp(hMainWnd, TEXT("FILTERROW")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_FILTER_ROW, TEXT("Filters"));	
-	AppendMenu(hDataMenu, (*(int*)GetProp(hMainWnd, TEXT("DARKTHEME")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_DARK_THEME, TEXT("Dark theme"));	
-	SetProp(hMainWnd, TEXT("DATAMENU"), hDataMenu);
+	HMENU hGridMenu = CreatePopupMenu();
+	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_CELL, TEXT("Copy cell"));
+	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_ROWS, TEXT("Copy row(s)"));
+	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_COLUMN, TEXT("Copy column"));	
+	AppendMenu(hGridMenu, MF_STRING, 0, NULL);
+	AppendMenu(hGridMenu, (*(int*)GetProp(hMainWnd, TEXT("FILTERROW")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_FILTER_ROW, TEXT("Filters"));	
+	AppendMenu(hGridMenu, (*(int*)GetProp(hMainWnd, TEXT("DARKTHEME")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_DARK_THEME, TEXT("Dark theme"));	
+	SetProp(hMainWnd, TEXT("GRIDMENU"), hGridMenu);
 
 	HMENU hTextMenu = CreatePopupMenu();
 	AppendMenu(hTextMenu, MF_STRING, IDM_COPY_TEXT, TEXT("Copy"));
@@ -422,8 +441,9 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	free((int*)GetProp(hWnd, TEXT("ROWCOUNT")));
 	free((int*)GetProp(hWnd, TEXT("TOTALROWCOUNT")));
 	free((int*)GetProp(hWnd, TEXT("ORDERBY")));
-	free((int*)GetProp(hWnd, TEXT("COLNO")));
-	free((int*)GetProp(hWnd, TEXT("SEARCHCOLNO")));	
+	free((int*)GetProp(hWnd, TEXT("CURRENTROWNO")));				
+	free((int*)GetProp(hWnd, TEXT("CURRENTCOLNO")));
+	free((int*)GetProp(hWnd, TEXT("SEARCHCELLPOS")));
 	free((int*)GetProp(hWnd, TEXT("SPLITTERPOSITION")));
 	free((int*)GetProp(hWnd, TEXT("ISFORMAT")));	
 	free((int*)GetProp(hWnd, TEXT("MAXHIGHLIGHTLENGTH")));
@@ -432,8 +452,10 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 
 	free((int*)GetProp(hWnd, TEXT("TEXTCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("BACKCOLOR")));
+	free((int*)GetProp(hWnd, TEXT("BACKCOLOR2")));	
 	free((int*)GetProp(hWnd, TEXT("FILTERTEXTCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("FILTERBACKCOLOR")));	
+	free((int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("SPLITTERCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("XMLTEXTCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("XMLTAGCOLOR")));
@@ -446,7 +468,7 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	DeleteObject(GetProp(hWnd, TEXT("BACKBRUSH")));	
 	DeleteObject(GetProp(hWnd, TEXT("FILTERBACKBRUSH")));
 	DeleteObject(GetProp(hWnd, TEXT("SPLITTERBRUSH")));
-	DestroyMenu(GetProp(hWnd, TEXT("DATAMENU")));
+	DestroyMenu(GetProp(hWnd, TEXT("GRIDMENU")));
 	DestroyMenu(GetProp(hWnd, TEXT("TEXTMENU")));
 
 	RemoveProp(hWnd, TEXT("WNDPROC"));
@@ -457,22 +479,26 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	RemoveProp(hWnd, TEXT("ROWCOUNT"));
 	RemoveProp(hWnd, TEXT("TOTALROWCOUNT"));
 	RemoveProp(hWnd, TEXT("ORDERBY"));
-	RemoveProp(hWnd, TEXT("COLNO"));
-	RemoveProp(hWnd, TEXT("SEARCHCOLNO"));		
+	RemoveProp(hWnd, TEXT("CURRENTROWNO"));	
+	RemoveProp(hWnd, TEXT("CURRENTCOLNO"));
+	RemoveProp(hWnd, TEXT("SEARCHCELLPOS"));		
 	RemoveProp(hWnd, TEXT("XML"));
 	RemoveProp(hWnd, TEXT("DATA"));	
 	RemoveProp(hWnd, TEXT("SPLITTERPOSITION"));
 	RemoveProp(hWnd, TEXT("ISFORMAT"));
 	RemoveProp(hWnd, TEXT("MAXHIGHLIGHTLENGTH"));
-	RemoveProp(hWnd, TEXT("FILTERALIGN"));		
+	RemoveProp(hWnd, TEXT("FILTERALIGN"));
+	RemoveProp(hWnd, TEXT("LASTFOCUS"));		
 	
 	RemoveProp(hWnd, TEXT("FONT"));
 	RemoveProp(hWnd, TEXT("FONTFAMILY"));	
 	RemoveProp(hWnd, TEXT("FONTSIZE"));	
 	RemoveProp(hWnd, TEXT("TEXTCOLOR"));
 	RemoveProp(hWnd, TEXT("BACKCOLOR"));
+	RemoveProp(hWnd, TEXT("BACKCOLOR2"));	
 	RemoveProp(hWnd, TEXT("FILTERTEXTCOLOR"));
 	RemoveProp(hWnd, TEXT("FILTERBACKCOLOR"));
+	RemoveProp(hWnd, TEXT("CURRENTCELLCOLOR"));
 	RemoveProp(hWnd, TEXT("SPLITTERCOLOR"));
 	RemoveProp(hWnd, TEXT("XMLTEXTCOLOR"));	
 	RemoveProp(hWnd, TEXT("XMLTAGCOLOR"));		
@@ -483,7 +509,7 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	RemoveProp(hWnd, TEXT("BACKBRUSH"));
 	RemoveProp(hWnd, TEXT("FILTERBACKBRUSH"));		
 	RemoveProp(hWnd, TEXT("SPLITTERBRUSH"));
-	RemoveProp(hWnd, TEXT("DATAMENU"));
+	RemoveProp(hWnd, TEXT("GRIDMENU"));
 	RemoveProp(hWnd, TEXT("TEXTMENU"));
 
 	DestroyWindow(hWnd);
@@ -540,7 +566,12 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			SetCursor(LoadCursor(0, GetProp(hWnd, TEXT("ISMOUSEHOVER")) ? IDC_SIZEWE : IDC_ARROW));
 			return TRUE;
 		}
-		break;		
+		break;	
+		
+		case WM_SETFOCUS: {
+			SetFocus(GetProp(hWnd, TEXT("LASTFOCUS")));
+		}
+		break;			
 
 		case WM_LBUTTONDOWN: {
 			int x = GET_X_LPARAM(lParam);
@@ -590,9 +621,6 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 		
 		case WM_KEYDOWN: {
-			if (wParam == VK_ESCAPE)
-				SendMessage(GetParent(hWnd), WM_CLOSE, 0, 0);
-
 			if (wParam == VK_TAB) {
 				HWND hFocus = GetFocus();
 				HWND wnds[1000] = {0};
@@ -638,42 +666,90 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 		case WM_COMMAND: {
 			WORD cmd = LOWORD(wParam);
-			if (cmd == IDM_COPY_CELL || cmd == IDM_COPY_ROW) {
+			if (cmd == IDM_COPY_CELL || cmd == IDM_COPY_ROWS || cmd == IDM_COPY_COLUMN) {
 				HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
 				HWND hGridWnd = GetDlgItem(hTabWnd, IDC_GRID);
 				HWND hHeader = ListView_GetHeader(hGridWnd);
-				int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
-				if (rowNo != -1) {
-					TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
-					int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
-					int rowCount = *(int*)GetProp(hWnd, TEXT("ROWCOUNT"));
-					if (!resultset || rowNo >= rowCount)
-						return 0;
+				int rowNo = *(int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
+				int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+				
+				int colCount = Header_GetItemCount(hHeader);
+				int rowCount = *(int*)GetProp(hWnd, TEXT("ROWCOUNT"));
+				int selCount = ListView_GetSelectedCount(hGridWnd);
 
-					int colCount = Header_GetItemCount(hHeader);
-
-					int startNo = cmd == IDM_COPY_CELL ? *(int*)GetProp(hWnd, TEXT("COLNO")) : 0;
-					int endNo = cmd == IDM_COPY_CELL ? startNo + 1 : colCount;
-					if (startNo > colCount || endNo > colCount)
-						return 0;
-
-					int len = 0;
-					for (int colNo = startNo; colNo < endNo; colNo++) {
-						int _rowNo = resultset[rowNo];
-						len += _tcslen(cache[_rowNo][colNo]) + 1 /* column delimiter: TAB */;
-					}
-
-					TCHAR* buf = calloc(len + 1, sizeof(TCHAR));
-					for (int colNo = startNo; colNo < endNo; colNo++) {
-						int _rowNo = resultset[rowNo];
-						_tcscat(buf, cache[_rowNo][colNo]);
-						if (colNo != endNo - 1)
-							_tcscat(buf, TEXT("\t"));
-					}
-
-					setClipboardText(buf);
-					free(buf);
+				if (rowNo == -1 ||
+					rowNo >= rowCount ||
+					colCount == 0 ||
+					cmd == IDM_COPY_CELL && colNo == -1 || 
+					cmd == IDM_COPY_CELL && colNo >= colCount || 
+					cmd == IDM_COPY_COLUMN && colNo == -1 || 
+					cmd == IDM_COPY_COLUMN && colNo >= colCount || 					
+					cmd == IDM_COPY_ROWS && selCount == 0) {
+					setClipboardText(TEXT(""));
+					return 0;
 				}
+						
+				TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
+				int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));				
+				if (!resultset)
+					return 0;
+
+				int len = 0;
+				if (cmd == IDM_COPY_CELL) 
+					len = _tcslen(cache[resultset[rowNo]][colNo]);
+				
+				if (cmd == IDM_COPY_ROWS) {
+					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
+					while (rowNo != -1) {
+						for (int i = 0; i < colCount; i++)
+							len += _tcslen(cache[resultset[rowNo]][i]) + 1 /* column delimiter: TAB */;
+						len++; /* \n */		
+						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
+					}
+				}
+
+				if (cmd == IDM_COPY_COLUMN) {
+					int rowNo = selCount < 2 ? 0 : ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
+					while (rowNo != -1 && rowNo < rowCount) {
+						len += _tcslen(cache[resultset[rowNo]][colNo]) + 1 /* \n */;
+						rowNo = selCount < 2 ? rowNo + 1 : ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);
+					} 
+				}	
+
+				TCHAR* buf = calloc(len + 1, sizeof(TCHAR));
+				if (cmd == IDM_COPY_CELL)
+					_tcscat(buf, cache[resultset[rowNo]][colNo]);
+				
+				if (cmd == IDM_COPY_ROWS) {
+					int pos = 0;
+					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
+					while (rowNo != -1) {
+						for (int i = 0; i < colCount; i++) {
+							int len = _tcslen(cache[resultset[rowNo]][i]);
+							_tcsncpy(buf + pos, cache[resultset[rowNo]][i], len);
+							buf[pos + len] = i == colCount - 1 ? TEXT('\n') : TEXT('\t');
+							pos += len + 1;
+						}
+						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
+					}
+					buf[pos - 1] = 0; // remove last \n
+				}
+
+				if (cmd == IDM_COPY_COLUMN) {
+					int pos = 0;
+					int rowNo = selCount < 2 ? 0 : ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
+					while (rowNo != -1 && rowNo < rowCount) {
+						int len = _tcslen(cache[resultset[rowNo]][colNo]);
+						_tcsncpy(buf + pos, cache[resultset[rowNo]][colNo], len);
+						rowNo = selCount < 2 ? rowNo + 1 : ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);
+						if (rowNo != -1 && rowNo < rowCount)
+							buf[pos + len] = TEXT('\n');
+						pos += len + 1;								
+					} 
+				}
+									
+				setClipboardText(buf);
+				free(buf);
 			}
 
 			if (cmd == IDM_COPY_TEXT || cmd == IDM_SELECTALL) {
@@ -754,11 +830,11 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 			
 			if (cmd == IDM_FILTER_ROW || cmd == IDM_DARK_THEME) {
-				HMENU hDataMenu = (HMENU)GetProp(hWnd, TEXT("DATAMENU"));
+				HMENU hGridMenu = (HMENU)GetProp(hWnd, TEXT("GRIDMENU"));
 				HMENU hTextMenu = (HMENU)GetProp(hWnd, TEXT("TEXTMENU"));				
 				int* pOpt = (int*)GetProp(hWnd, cmd == IDM_FILTER_ROW ? TEXT("FILTERROW") : TEXT("DARKTHEME"));
 				*pOpt = (*pOpt + 1) % 2;
-				Menu_SetItemState(hDataMenu, cmd, *pOpt ? MFS_CHECKED : 0);
+				Menu_SetItemState(hGridMenu, cmd, *pOpt ? MFS_CHECKED : 0);
 				Menu_SetItemState(hTextMenu, cmd, *pOpt ? MFS_CHECKED : 0);				
 				
 				UINT msg = cmd == IDM_FILTER_ROW ? WMU_SET_HEADER_FILTERS : WMU_SET_THEME;
@@ -824,29 +900,54 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);
 			}
 
-			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_RCLICK) {
+			if (pHdr->idFrom == IDC_GRID && (pHdr->code == (DWORD)NM_CLICK || pHdr->code == (DWORD)NM_RCLICK)) {
 				NMITEMACTIVATE* ia = (LPNMITEMACTIVATE) lParam;
-				POINT p;
-				GetCursorPos(&p);
-				*(int*)GetProp(hWnd, TEXT("COLNO")) = ia->iSubItem;
-				TrackPopupMenu(GetProp(hWnd, TEXT("DATAMENU")), TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hWnd, NULL);
+				SendMessage(hWnd, WMU_SET_CURRENT_CELL, ia->iItem, ia->iSubItem);
 			}
 
+			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_RCLICK) {
+				POINT p;
+				GetCursorPos(&p);
+				TrackPopupMenu(GetProp(hWnd, TEXT("GRIDMENU")), TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hWnd, NULL);
+			}
+			
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)LVN_ITEMCHANGED) {
-				HWND hStatusWnd = GetDlgItem(hWnd, IDC_STATUSBAR);
-
-				TCHAR buf[255] = {0};
-				int pos = ListView_GetNextItem(pHdr->hwndFrom, -1, LVNI_SELECTED);
-				if (pos != -1)
-					_sntprintf(buf, 255, TEXT(" %i"), pos + 1);
-				SendMessage(hStatusWnd, SB_SETTEXT, SB_CURRENT_ROW, (LPARAM)buf);
-				SendMessage(hStatusWnd, SB_SETTEXT, SB_AUXILIARY, (LPARAM)0);
+				NMLISTVIEW* lv = (NMLISTVIEW*)lParam;
+				if (lv->uOldState != lv->uNewState && (lv->uNewState & LVIS_SELECTED))				
+					SendMessage(hWnd, WMU_SET_CURRENT_CELL, lv->iItem, *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO")));	
 			}
 
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)LVN_KEYDOWN) {
 				NMLVKEYDOWN* kd = (LPNMLVKEYDOWN) lParam;
-				if (kd->wVKey == 0x43 && GetKeyState(VK_CONTROL)) // Ctrl + C
-					SendMessage(hWnd, WM_COMMAND, IDM_COPY_ROW, 0);
+				if (kd->wVKey == 0x43) { // C
+					BOOL isCtrl = HIWORD(GetKeyState(VK_CONTROL));
+					BOOL isShift = HIWORD(GetKeyState(VK_SHIFT)); 
+					if (!isCtrl && !isShift)
+						return FALSE;
+						
+					int action = !isShift ? IDM_COPY_CELL : isCtrl ? IDM_COPY_COLUMN : IDM_COPY_ROWS;
+					SendMessage(hWnd, WM_COMMAND, action, 0);
+					return TRUE;
+				}
+
+				if (kd->wVKey == 0x41 && HIWORD(GetKeyState(VK_CONTROL))) { // Ctrl + A
+					HWND hGridWnd = pHdr->hwndFrom;
+					SendMessage(hGridWnd, WM_SETREDRAW, FALSE, 0);
+					int rowNo = *(int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
+					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));					
+					ListView_SetItemState(hGridWnd, -1, LVIS_SELECTED, LVIS_SELECTED | LVIS_FOCUSED);
+					SendMessage(hWnd, WMU_SET_CURRENT_CELL, rowNo, colNo);
+					SendMessage(hGridWnd, WM_SETREDRAW, TRUE, 0);
+					InvalidateRect(hGridWnd, NULL, TRUE);
+				}
+				
+				if (kd->wVKey == VK_LEFT || kd->wVKey == VK_RIGHT) {
+					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
+					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO")) + (kd->wVKey == VK_RIGHT ? 1 : -1);
+					colNo = colNo < 0 ? colCount - 1 : colNo > colCount - 1 ? 0 : colNo;
+					SendMessage(hWnd, WMU_SET_CURRENT_CELL, *(int*)GetProp(hWnd, TEXT("CURRENTROWNO")), colNo);
+					return TRUE;
+				}
 			}
 			
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_DBLCLK) {
@@ -877,6 +978,49 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			if (pHdr->code == HDN_ITEMCHANGED && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(GetDlgItem(hWnd, IDC_TAB), IDC_GRID)))
 				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
+				
+			if (pHdr->code == (UINT)NM_SETFOCUS) 
+				SetProp(hWnd, TEXT("LASTFOCUS"), pHdr->hwndFrom);
+			
+			if (pHdr->idFrom == IDC_GRID && pHdr->code == (UINT)NM_CUSTOMDRAW) {
+				int result = CDRF_DODEFAULT;
+
+				NMLVCUSTOMDRAW* pCustomDraw = (LPNMLVCUSTOMDRAW)lParam;
+				if (pCustomDraw->nmcd.dwDrawStage == CDDS_PREPAINT) 
+					result = CDRF_NOTIFYITEMDRAW;
+	
+				if (pCustomDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) 
+					result = CDRF_NOTIFYSUBITEMDRAW | CDRF_NEWFONT;
+	
+				if (pCustomDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+					pCustomDraw->clrTextBk = pCustomDraw->nmcd.dwItemSpec % 2 == 0 ? *(int*)GetProp(hWnd, TEXT("BACKCOLOR")) : *(int*)GetProp(hWnd, TEXT("BACKCOLOR2"));
+					result = CDRF_NOTIFYPOSTPAINT;
+				}
+	
+				if ((pCustomDraw->nmcd.dwDrawStage == CDDS_POSTPAINT) | CDDS_SUBITEM) {
+					int rowNo = *(int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
+					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+					if ((pCustomDraw->nmcd.dwItemSpec == (DWORD)rowNo) && (pCustomDraw->iSubItem == colNo)) {
+						HPEN hPen = CreatePen(PS_DOT, 1, *(int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")));
+						HDC hDC = pCustomDraw->nmcd.hdc;
+						SelectObject(hDC, hPen);
+	
+						RECT rc = {0};
+						ListView_GetSubItemRect(pHdr->hwndFrom, rowNo, colNo, LVIR_BOUNDS, &rc);
+						if (colNo == 0) 
+							rc.right = ListView_GetColumnWidth(pHdr->hwndFrom, 0);
+
+						MoveToEx(hDC, rc.left - 2, rc.top + 1, 0);
+						LineTo(hDC, rc.right - 1, rc.top + 1);
+						LineTo(hDC, rc.right - 1, rc.bottom - 2);
+						LineTo(hDC, rc.left + 1, rc.bottom - 2);
+						LineTo(hDC, rc.left + 1, rc.top);
+						DeleteObject(hPen);
+					}
+				}
+	
+				return result;
+			}				
 		}
 		break;
 
@@ -894,6 +1038,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 			HWND hHeader = ListView_GetHeader(hGridWnd);
 			SendMessage(hWnd, WMU_RESET_CACHE, 0, 0);
+			SendMessage(hWnd, WMU_SET_CURRENT_CELL, 0, 0);
 			*(int*)GetProp(hWnd, TEXT("ORDERBY")) = 0;
 
 			int colCount = Header_GetItemCount(hHeader);
@@ -1283,7 +1428,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				RECT rc;
 				Header_GetItemRect(hHeader, colNo, &rc);
 				int h2 = round((rc.bottom - rc.top) / 2);
-				SetWindowPos(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), 0, rc.left - (colNo > 0), h2, rc.right - rc.left + 1, h2 + 1, SWP_NOZORDER);
+				SetWindowPos(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), 0, rc.left, h2, rc.right - rc.left, h2 + 1, SWP_NOZORDER);
 			}
 		}
 		break;
@@ -1364,6 +1509,45 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			PostMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
 		}
 		break;
+		
+		// wParam = rowNo, lParam = colNo
+		case WMU_SET_CURRENT_CELL: {
+			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
+			HWND hGridWnd = GetDlgItem(hTabWnd, IDC_GRID);
+			HWND hHeader = ListView_GetHeader(hGridWnd);
+			HWND hStatusWnd = GetDlgItem(hWnd, IDC_STATUSBAR);
+			SendMessage(hStatusWnd, SB_SETTEXT, SB_AUXILIARY, (LPARAM)0);
+						
+			int *pRowNo = (int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
+			int *pColNo = (int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+			if (*pRowNo == wParam && *pColNo == lParam)
+				return 0;
+			
+			RECT rc, rc2;
+			ListView_GetSubItemRect(hGridWnd, *pRowNo, *pColNo, LVIR_BOUNDS, &rc);
+			if (*pColNo == 0)
+				rc.right = ListView_GetColumnWidth(hGridWnd, *pColNo);			
+			InvalidateRect(hGridWnd, &rc, TRUE);
+			
+			*pRowNo = wParam;
+			*pColNo = lParam;
+			ListView_GetSubItemRect(hGridWnd, *pRowNo, *pColNo, LVIR_BOUNDS, &rc);
+			if (*pColNo == 0)
+				rc.right = ListView_GetColumnWidth(hGridWnd, *pColNo);
+			InvalidateRect(hGridWnd, &rc, FALSE);
+			
+			GetClientRect(hGridWnd, &rc2);
+			int w = rc.right - rc.left;
+			int dx = rc2.right < rc.right ? rc.left - rc2.right + w : rc.left < 0 ? rc.left : 0;
+
+			ListView_Scroll(hGridWnd, dx, 0);
+			
+			TCHAR buf[32] = {0};
+			if (*pColNo != - 1 && *pRowNo != -1)
+				_sntprintf(buf, 32, TEXT(" %i:%i"), *pRowNo + 1, *pColNo + 1);
+			SendMessage(hStatusWnd, SB_SETTEXT, SB_CURRENT_CELL, (LPARAM)buf);
+		}
+		break;			
 
 		case WMU_RESET_CACHE: {
 			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
@@ -1437,14 +1621,18 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			
 			int textColor = !isDark ? getStoredValue(TEXT("text-color"), RGB(0, 0, 0)) : getStoredValue(TEXT("text-color-dark"), RGB(220, 220, 220));
 			int backColor = !isDark ? getStoredValue(TEXT("back-color"), RGB(255, 255, 255)) : getStoredValue(TEXT("back-color-dark"), RGB(32, 32, 32));
+			int backColor2 = !isDark ? getStoredValue(TEXT("back-color2"), RGB(240, 240, 240)) : getStoredValue(TEXT("back-color2-dark"), RGB(52, 52, 52));
 			int filterTextColor = !isDark ? getStoredValue(TEXT("filter-text-color"), RGB(0, 0, 0)) : getStoredValue(TEXT("filter-text-color-dark"), RGB(255, 255, 255));
 			int filterBackColor = !isDark ? getStoredValue(TEXT("filter-back-color"), RGB(240, 240, 240)) : getStoredValue(TEXT("filter-back-color-dark"), RGB(60, 60, 60));
+			int currCellColor = !isDark ? getStoredValue(TEXT("current-cell-color"), RGB(20, 250, 250)) : getStoredValue(TEXT("current-cell-color-dark"), RGB(20, 250, 250));
 			int splitterColor = !isDark ? getStoredValue(TEXT("splitter-color"), GetSysColor(COLOR_BTNFACE)) : getStoredValue(TEXT("splitter-color-dark"), GetSysColor(COLOR_BTNFACE));			
 			
 			*(int*)GetProp(hWnd, TEXT("TEXTCOLOR")) = textColor;
 			*(int*)GetProp(hWnd, TEXT("BACKCOLOR")) = backColor;
+			*(int*)GetProp(hWnd, TEXT("BACKCOLOR2")) = backColor2;			
 			*(int*)GetProp(hWnd, TEXT("FILTERTEXTCOLOR")) = filterTextColor;
 			*(int*)GetProp(hWnd, TEXT("FILTERBACKCOLOR")) = filterBackColor;
+			*(int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")) = currCellColor;			
 			*(int*)GetProp(hWnd, TEXT("SPLITTERCOLOR")) = splitterColor;
 			
 			*(int*)GetProp(hWnd, TEXT("XMLTEXTCOLOR")) = !isDark ? getStoredValue(TEXT("xml-text-color"), RGB(0, 0, 0)) : getStoredValue(TEXT("xml-text-color-dark"), RGB(220, 220, 220));
@@ -1508,16 +1696,39 @@ LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 
 			RECT rc;
 			GetClientRect(hWnd, &rc);
+			HWND hMainWnd = getMainWindow(hWnd);
+			BOOL isDark = *(int*)GetProp(hMainWnd, TEXT("DARKTHEME")); 
+
 			HDC hDC = GetWindowDC(hWnd);
-			HPEN hPen = CreatePen(PS_SOLID, 1, *(int*)GetProp(getMainWindow(hWnd), TEXT("FILTERBACKCOLOR")));
+			HPEN hPen = CreatePen(PS_SOLID, 1, *(int*)GetProp(hMainWnd, TEXT("FILTERBACKCOLOR")));
 			HPEN oldPen = SelectObject(hDC, hPen);
 			MoveToEx(hDC, 1, 0, 0);
 			LineTo(hDC, rc.right - 1, 0);
+			LineTo(hDC, rc.right - 1, rc.bottom - 1);
+			
+			if (isDark) {
+				DeleteObject(hPen);
+				hPen = CreatePen(PS_SOLID, 1, GetSysColor(COLOR_BTNFACE));
+				SelectObject(hDC, hPen);
+				
+				MoveToEx(hDC, 0, 0, 0);
+				LineTo(hDC, 0, rc.bottom);
+				MoveToEx(hDC, 0, rc.bottom - 1, 0);
+				LineTo(hDC, rc.right, rc.bottom - 1);
+				MoveToEx(hDC, 0, rc.bottom - 2, 0);
+				LineTo(hDC, rc.right, rc.bottom - 2);
+			}
+			
 			SelectObject(hDC, oldPen);
 			DeleteObject(hPen);
 			ReleaseDC(hWnd, hDC);
 
 			return 0;
+		}
+		break;
+		
+		case WM_SETFOCUS: {
+			SetProp(getMainWindow(hWnd), TEXT("LASTFOCUS"), hWnd);
 		}
 		break;
 
@@ -1544,6 +1755,16 @@ LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 	}
 
 	return CallWindowProc(cbDefault, hWnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK cbNewTab(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_NOTIFY) {
+		NMHDR* pHdr = (LPNMHDR)lParam;	
+		if (pHdr->idFrom == IDC_GRID && pHdr->code == (UINT)NM_CUSTOMDRAW)
+			return SendMessage(GetParent(hWnd), msg, wParam, lParam);
+	}
+
+	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
 }
 
 LRESULT CALLBACK cbNewText(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1578,11 +1799,9 @@ LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		wParam == VK_TAB || wParam == VK_ESCAPE || 
 		wParam == VK_F3 || wParam == VK_F5 || wParam == VK_F7 || (HIWORD(GetKeyState(VK_CONTROL)) && wParam == 0x46) || // Ctrl + F
 		wParam == VK_F1 || wParam == VK_F11 ||
-		(wParam >= 0x31 && wParam <= 0x42) && !getStoredValue(TEXT("disable-num-keys"), 0) || // 1 - 8
+		(wParam >= 0x31 && wParam <= 0x38) && !getStoredValue(TEXT("disable-num-keys"), 0) || // 1 - 8
 		(wParam == 0x4E || wParam == 0x50) && !getStoredValue(TEXT("disable-np-keys"), 0))) { // N, P
 		HWND hMainWnd = getMainWindow(hWnd);
-		if (wParam == VK_F7 || wParam == 0x46)
-			*(int*)GetProp(hMainWnd, TEXT("SEARCHCOLNO")) = 0;
 		SendMessage(wParam == VK_TAB || wParam == VK_ESCAPE || wParam == VK_F1 ? hMainWnd : GetParent(hMainWnd), WM_KEYDOWN, wParam, lParam);
 		return 0;
 	}
