@@ -47,6 +47,7 @@
 #define IDM_SELECTALL          5011
 #define IDM_FORMAT             5012
 #define IDM_LOCATE             5013
+#define IDM_XPATH              5020
 
 #define SB_VERSION             0
 #define SB_CODEPAGE            1
@@ -60,7 +61,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("0.9.6")
+#define APP_VERSION            TEXT("0.9.7")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -102,6 +103,8 @@ int CALLBACK cbEnumTabStopChildren (HWND hWnd, LPARAM lParam);
 TCHAR* utf8to16(const char* in);
 char* utf16to8(const TCHAR* in);
 int findString(TCHAR* text, TCHAR* word, BOOL isMatchCase, BOOL isWholeWords);
+BOOL hasString (const TCHAR* str, const TCHAR* sub, BOOL isCaseSensitive);
+TCHAR* extractUrl(TCHAR* data);
 int detectCodePage(const unsigned char *data);
 void setClipboardText(const TCHAR* text);
 BOOL isNumber(const TCHAR* val);
@@ -376,6 +379,10 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hTextWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hTextWnd, GWLP_WNDPROC, (LONG_PTR)cbNewText));
 	TabCtrl_SetCurSel(hTabWnd, tabNo);
 
+	HMENU hTreeMenu = CreatePopupMenu();
+	AppendMenu(hTreeMenu, MF_STRING, IDM_XPATH, TEXT("Copy XPath"));
+	SetProp(hMainWnd, TEXT("TREEMENU"), hTreeMenu);
+	
 	HMENU hGridMenu = CreatePopupMenu();
 	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_CELL, TEXT("Copy cell"));
 	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_ROWS, TEXT("Copy row(s)"));
@@ -650,7 +657,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		
 		case WM_CONTEXTMENU: {
 			POINT p = {LOWORD(lParam), HIWORD(lParam)};
-			if (GetDlgCtrlID(WindowFromPoint(p)) == IDC_TEXT) {
+			int id = GetDlgCtrlID(WindowFromPoint(p));
+			if (id == IDC_TEXT) {
 				HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
 				HWND hTextWnd = GetDlgItem(hTabWnd, IDC_TEXT);
 				ScreenToClient(hTextWnd, &p);
@@ -662,6 +670,21 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				
 				ClientToScreen(hTextWnd, &p);
 				TrackPopupMenu(GetProp(hWnd, TEXT("TEXTMENU")), TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hWnd, NULL);
+			}
+			
+			// update selected item on right click
+			if (id == IDC_TREE) {
+				HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);				
+				POINT p2 = {0};
+				GetCursorPos(&p2);
+				ScreenToClient(hTreeWnd, &p2);
+				TVHITTESTINFO thi = {p2,TVHT_ONITEM};
+				HTREEITEM hItem = TreeView_HitTest(hTreeWnd, &thi);
+				TreeView_SelectItem(hTreeWnd, hItem);
+				if (!hItem)
+					return 0;
+					
+				TrackPopupMenu(GetProp(hWnd, TEXT("TREEMENU")), TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hWnd, NULL);
 			}
 		}
 		break;
@@ -703,8 +726,11 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (cmd == IDM_COPY_ROWS) {
 					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
 					while (rowNo != -1) {
-						for (int i = 0; i < colCount; i++)
-							len += _tcslen(cache[resultset[rowNo]][i]) + 1 /* column delimiter: TAB */;
+						for (int colNo = 0; colNo < colCount; colNo++) {
+							if (ListView_GetColumnWidth(hGridWnd, colNo)) 
+								len += _tcslen(cache[resultset[rowNo]][colNo]) + 1; /* column delimiter: TAB */
+						}
+													
 						len++; /* \n */		
 						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
 					}
@@ -726,12 +752,16 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					int pos = 0;
 					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
 					while (rowNo != -1) {
-						for (int i = 0; i < colCount; i++) {
-							int len = _tcslen(cache[resultset[rowNo]][i]);
-							_tcsncpy(buf + pos, cache[resultset[rowNo]][i], len);
-							buf[pos + len] = i == colCount - 1 ? TEXT('\n') : TEXT('\t');
-							pos += len + 1;
+						for (int colNo = 0; colNo < colCount; colNo++) {
+							if (ListView_GetColumnWidth(hGridWnd, colNo)) {
+								int len = _tcslen(cache[resultset[rowNo]][colNo]);
+								_tcsncpy(buf + pos, cache[resultset[rowNo]][colNo], len);
+								buf[pos + len] = TEXT('\t');
+								pos += len + 1;
+							}
 						}
+
+						buf[pos - (pos > 0)] = TEXT('\n');
 						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
 					}
 					buf[pos - 1] = 0; // remove last \n
@@ -841,6 +871,47 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				
 				UINT msg = cmd == IDM_FILTER_ROW ? WMU_SET_HEADER_FILTERS : WMU_SET_THEME;
 				SendMessage(hWnd, msg, 0, 0);				
+			}
+			
+			if (cmd == IDM_XPATH) {
+				HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);
+				HTREEITEM hItem = TreeView_GetSelection(hTreeWnd);
+				xml_element* node = (xml_element*)TreeView_GetItemParam(hTreeWnd, hItem);
+				if (hItem && node) {
+					char res[MAX_LENGTH] = {0};
+
+					do {
+						int no = 1;						
+						xml_element* n = node->prev;
+						while (n) {
+							no += n && n->key ? strcmp(node->key, n->key) == 0 : 0;
+							n = n->prev;
+						}
+						
+						BOOL isUnique = TRUE;
+						n = node->next;
+						while (n && isUnique) {
+							isUnique = n && n->key ? strcmp(node->key, n->key) : TRUE;
+							n = n->next;
+						}
+						
+						if (node->key) {
+							char buf[MAX_LENGTH];
+							if (no > 1 || !isUnique)
+								sprintf(buf, "/%s[%i]%s", node->key, no, res);
+							else 	
+								sprintf(buf, "/%s%s", node->key, res);
+								
+							strcpy(res, buf);
+						}
+						
+						node = node->parent;
+					} while (node);
+					
+					TCHAR* res16 = utf8to16(res);
+					setClipboardText(res16);
+					free(res16);
+				}
 			}			
 		}
 		break;
@@ -894,12 +965,24 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == LVN_COLUMNCLICK) {
-				NMLISTVIEW* pLV = (NMLISTVIEW*)lParam;
-				int colNo = pLV->iSubItem + 1;
-				int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
-				int orderBy = *pOrderBy;
-				*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
-				SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);
+				NMLISTVIEW* lv = (NMLISTVIEW*)lParam;
+				// Hide or sort the column
+				if (HIWORD(GetKeyState(VK_CONTROL))) {
+					HWND hGridWnd = pHdr->hwndFrom;
+					HWND hHeader = ListView_GetHeader(hGridWnd);
+					int colNo = lv->iSubItem;
+					
+					HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+					SetWindowLongPtr(hEdit, GWLP_USERDATA, (LONG_PTR)ListView_GetColumnWidth(hGridWnd, colNo));				
+					ListView_SetColumnWidth(pHdr->hwndFrom, colNo, 0); 
+					InvalidateRect(hHeader, NULL, TRUE);
+				} else {
+					int colNo = lv->iSubItem + 1;
+					int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
+					int orderBy = *pOrderBy;
+					*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
+					SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);				
+				}				
 			}
 
 			if (pHdr->idFrom == IDC_GRID && (pHdr->code == (DWORD)NM_CLICK || pHdr->code == (DWORD)NM_RCLICK)) {
@@ -918,6 +1001,16 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (lv->uOldState != lv->uNewState && (lv->uNewState & LVIS_SELECTED))				
 					SendMessage(hWnd, WMU_SET_CURRENT_CELL, lv->iItem, *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO")));	
 			}
+			
+			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_CLICK && HIWORD(GetKeyState(VK_MENU))) {	
+				NMITEMACTIVATE* ia = (LPNMITEMACTIVATE) lParam;
+				TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
+				int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
+				
+				TCHAR* url = extractUrl(cache[resultset[ia->iItem]][ia->iSubItem]);
+				ShellExecute(0, TEXT("open"), url, 0, 0 , SW_SHOW);
+				free(url);
+			}			
 
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)LVN_KEYDOWN) {
 				NMLVKEYDOWN* kd = (LPNMLVKEYDOWN) lParam;
@@ -943,6 +1036,21 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					SendMessage(hGridWnd, WM_SETREDRAW, TRUE, 0);
 					InvalidateRect(hGridWnd, NULL, TRUE);
 				}
+				
+				if (kd->wVKey == 0x20 && HIWORD(GetKeyState(VK_CONTROL))) { // Ctrl + Space				
+					HWND hGridWnd = pHdr->hwndFrom;
+					HWND hHeader = ListView_GetHeader(hGridWnd);
+					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
+					for (int colNo = 0; colNo < colCount; colNo++) {
+						if (ListView_GetColumnWidth(hGridWnd, colNo) == 0) {
+							HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+							ListView_SetColumnWidth(hGridWnd, colNo, (int)GetWindowLongPtr(hEdit, GWLP_USERDATA));
+						}
+					}
+
+					InvalidateRect(hGridWnd, NULL, TRUE);					
+					return TRUE;
+				}				
 				
 				if (kd->wVKey == VK_LEFT || kd->wVKey == VK_RIGHT) {
 					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
@@ -1253,6 +1361,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int* pRowCount = (int*)GetProp(hWnd, TEXT("ROWCOUNT"));
 			int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
 			int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
+			BOOL isCaseSensitive = getStoredValue(TEXT("filter-case-sensitive"), 0);
+			
 			if (resultset)
 				free(resultset);
 
@@ -1289,12 +1399,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						double dv = _tcstod(value, &end);
 						bResultset[rowNo] = (filter[0] == TEXT('<') && dv < df) || (filter[0] == TEXT('>') && dv > df);
 					} else {
-						bResultset[rowNo] = len == 1 ? _tcsstr(value, filter) != 0 :
-							filter[0] == TEXT('=') ? _tcscmp(value, filter + 1) == 0 :
-							filter[0] == TEXT('!') ? _tcsstr(value, filter + 1) == 0 :
+						bResultset[rowNo] = len == 1 ? hasString(value, filter, isCaseSensitive) :
+							filter[0] == TEXT('=') && isCaseSensitive ? _tcscmp(value, filter + 1) == 0 :
+							filter[0] == TEXT('=') && !isCaseSensitive ? _tcsicmp(value, filter + 1) == 0 :							
+							filter[0] == TEXT('!') ? !hasString(value, filter + 1, isCaseSensitive) :
 							filter[0] == TEXT('<') ? _tcscmp(value, filter + 1) < 0 :
 							filter[0] == TEXT('>') ? _tcscmp(value, filter + 1) > 0 :
-							_tcsstr(value, filter) != 0;
+							hasString(value, filter, isCaseSensitive);
 					}
 				}
 			}
@@ -2147,6 +2258,42 @@ int findString(TCHAR* text, TCHAR* word, BOOL isMatchCase, BOOL isWholeWords) {
 	}
 
 	return res; 
+}
+
+BOOL hasString (const TCHAR* str, const TCHAR* sub, BOOL isCaseSensitive) {
+	BOOL res = FALSE;
+
+	TCHAR* lstr = _tcsdup(str);
+	_tcslwr(lstr);
+	TCHAR* lsub = _tcsdup(sub);
+	_tcslwr(lsub);
+	res = isCaseSensitive ? _tcsstr(str, sub) != 0 : _tcsstr(lstr, lsub) != 0;
+	free(lstr);
+	free(lsub);
+
+	return res;
+};
+
+TCHAR* extractUrl(TCHAR* data) {
+	int len = data ? _tcslen(data) : 0;
+	int start = len;
+	int end = len;
+	
+	TCHAR* url = calloc(len + 10, sizeof(TCHAR));
+	
+	TCHAR* slashes = _tcsstr(data, TEXT("://"));
+	if (slashes) {
+		start = len - _tcslen(slashes);
+		end = start + 3;
+		for (; start > 0 && _istalpha(data[start - 1]); start--);
+		for (; end < len && data[end] != TEXT(' ') && data[end] != TEXT('"') && data[end] != TEXT('\''); end++);
+		_tcsncpy(url, data + start, end - start);
+		
+	} else if (_tcschr(data, TEXT('.'))) {
+		_sntprintf(url, len + 10, TEXT("https://%ls"), data);
+	}
+	
+	return url;
 }
 
 // https://stackoverflow.com/a/25023604/6121703
