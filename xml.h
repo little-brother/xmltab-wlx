@@ -52,14 +52,16 @@ typedef struct xml_element {
 	xml_attribute *first_attribute, *last_attribute;
 	
 	int attribute_count;
+	void* userdata;
 } xml_element;
 
-struct xml_element *xml_parse(const char *);
+struct xml_element* xml_parse(const char *);
 void xml_free(struct xml_element *);
 
-struct xml_element *xml_find_element(struct xml_element*, const char*);
-struct xml_attribute *xml_find_attribute(struct xml_element*, const char*);
+struct xml_element* xml_find_element(struct xml_element*, const char*);
+struct xml_attribute* xml_find_attribute(struct xml_element*, const char*);
 
-char *xml_content(struct xml_element *);
+char* xml_content(struct xml_element *);
+char* xml_path(struct xml_element *);
 
 #endif

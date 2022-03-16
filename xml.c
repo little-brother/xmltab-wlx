@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "xml.h"
@@ -53,6 +54,9 @@ struct xml_tag_pattern {
  */
 static size_t xml_quotedspn(const char *s, char q) {
 	const char *first = s;
+	// zero-length attribute e.g. a = ""
+	if (*s == q) 
+		return 0;
 
 	while (*++s) {
 		if (*s == '\\') {
@@ -339,6 +343,7 @@ static int xml_parse_attributes(struct xml_element *e, char *from) {
 
 			value = from;
 			value_len = p;
+			
 			from += p;
 
 			if (*from == q) {
@@ -641,6 +646,8 @@ int xml_parse_chunk(struct xml_state *st, const char *d) {
 
 	if (!st->root) {
 		st->current = st->root = xml_element_create(NULL, 0);
+		st->root->offset = 0;
+		st->root->length = strlen(d);
 	}
 
 	if (!st->parser) {
@@ -829,4 +836,58 @@ char *xml_content(struct xml_element *e) {
 	xml_content_cpy(e, &t);
 
 	return s;
+}
+
+int xml_path_no (struct xml_element *e) {
+	int no = 1;						
+	xml_element* n = e->prev;
+	while (n) {
+		no += n && n->key ? strcmp(e->key, n->key) == 0 : 0;
+		n = n->prev;
+	}
+	
+	int isUnique = no == 1;
+	n = e->next;
+	while (n && isUnique) {
+		isUnique = n && n->key ? strcmp(e->key, n->key) != 0 : 1;
+		n = n->next;
+	}
+
+	return isUnique ? 0 : no;
+}
+
+char* xml_path (struct xml_element *e) {
+	int len = 1000;
+	char* res = calloc(len, sizeof(char));
+	
+	if (!e->key) {
+		char* xpath = xml_path(e->parent);
+		res = realloc(res, strlen(xpath) + 64);
+		sprintf(res, "%s/text()", xpath);
+		return res;
+	}
+	
+	do {
+		int no = xml_path_no(e);
+	
+		if (e->key) {
+			if (strlen(e->key) + strlen(res) < 100) {
+				len += 1000;
+				res = realloc(res, len);
+			}
+				
+			char* buf = calloc(strlen(res) + strlen(e->key) + 64, sizeof(char));
+			if (no)
+				sprintf(buf, "/%s[%i]%s", e->key, no, res);
+			else 	
+				sprintf(buf, "/%s%s", e->key, res);
+				
+			strcpy(res, buf);
+			free(buf);
+		}
+		
+		e = e->parent;
+	} while (e);
+	
+	return res;
 }
