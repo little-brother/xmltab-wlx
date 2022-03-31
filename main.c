@@ -67,7 +67,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("0.9.8")
+#define APP_VERSION            TEXT("0.9.9")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -1727,9 +1727,12 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);											
 
 			// Bug fix: force Windows to redraw header
-			int w = ListView_GetColumnWidth(hGridWnd, 0);
-			ListView_SetColumnWidth(hGridWnd, 0, w + 1);
-			ListView_SetColumnWidth(hGridWnd, 0, w);			
+			if (IsWindowVisible(hGridWnd)) { // Win10x64, TCx32 
+				int w = ListView_GetColumnWidth(hGridWnd, 0);
+				ListView_SetColumnWidth(hGridWnd, 0, w + 1);
+				ListView_SetColumnWidth(hGridWnd, 0, w);			
+			}
+						
 			SendMessage(hWnd, WM_SETREDRAW, TRUE, 0);
 			InvalidateRect(hWnd, NULL, TRUE);
 		}
