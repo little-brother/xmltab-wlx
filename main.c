@@ -67,7 +67,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("0.9.9")
+#define APP_VERSION            TEXT("1.0.0")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -511,6 +511,14 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SendMessage(hMainWnd, WMU_SET_FONT, 0, 0);	
 	SendMessage(hMainWnd, WMU_SET_THEME, 0, 0);	
 	HTREEITEM hItem = TreeView_GetNextItem(hTreeWnd, TVI_ROOT, TVGN_CHILD);
+	if (getStoredValue(TEXT("open-first-element"), 1)) {
+		xml_element* node = (xml_element*)TreeView_GetItemParam(hTreeWnd, hItem);
+		while(node && (!node->key || node->key[0] == '?' || node->key[0] == '!'))
+			node = node->next;
+		
+		if (node)
+			hItem = (HTREEITEM)node->userdata;
+	}
 	TreeView_Select(hTreeWnd, hItem, TVGN_CARET);
 	ShowWindow(hMainWnd, SW_SHOW);
 	SetFocus(hTreeWnd);
