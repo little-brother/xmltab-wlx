@@ -464,7 +464,20 @@ static const char *xml_parse_tag_body(struct xml_state *st, const char *d) {
 
 		if (!st->cursor) {
 			/* find first character of terminating pattern */
-			m = strchr(d, st->tag->close[0]);
+			//m = strchr(d, st->tag->close[0]);
+
+			// Fix special chars e.g > inside attributes 
+			// https://forum.wincmd.ru/viewpost.php?p=135766
+			int i = 0;
+			int q = 0;
+			while (d[i]) {
+				if (d[i] == st->tag->close[0] && !q) {
+					m = d + i;
+					break;
+				}
+				q = (q + (d[i] == '"')) % 2;
+				i++;
+			}
 		} else {
 			/* find next character of terminating pattern */
 			for (;;) {
