@@ -67,7 +67,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("1.0.4")
+#define APP_VERSION            TEXT("1.0.5")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -461,7 +461,7 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 		205, 0, 100, 100, hTabWnd, (HMENU)IDC_GRID, GetModuleHandle(0), NULL);
 	
 	int noLines = getStoredValue(TEXT("disable-grid-lines"), 0);
-	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | (noLines ? 0 : LVS_EX_GRIDLINES) | LVS_EX_LABELTIP);
+	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | (noLines ? 0 : LVS_EX_GRIDLINES) | LVS_EX_LABELTIP | LVS_EX_HEADERDRAGDROP);
 	SetProp(hGridWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hGridWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));
 
 	HWND hHeader = ListView_GetHeader(hGridWnd);
@@ -855,8 +855,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (cmd == IDM_COPY_ROWS) {
 					int pos = 0;
 					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
+
+					int* colOrder = calloc(colCount, sizeof(int));
+					Header_GetOrderArray(hHeader, colCount, colOrder);
+
 					while (rowNo != -1) {
-						for (int colNo = 0; colNo < colCount; colNo++) {
+						for (int idx = 0; idx < colCount; idx++) {
+							int colNo = colOrder[idx];
 							if (ListView_GetColumnWidth(hGridWnd, colNo)) {
 								int len = _tcslen(cache[resultset[rowNo]][colNo]);
 								_tcsncpy(buf + pos, cache[resultset[rowNo]][colNo], len);
@@ -869,6 +874,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
 					}
 					buf[pos - 1] = 0; // remove last \n
+
+					free(colOrder);
 				}
 
 				if (cmd == IDM_COPY_COLUMN) {
@@ -1209,8 +1216,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					TreeView_SelectItem(hTreeWnd, hItem);
 			}			
 
-			if (pHdr->code == HDN_ITEMCHANGED && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(GetDlgItem(hWnd, IDC_TAB), IDC_GRID)))
-				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
+			if ((pHdr->code == HDN_ITEMCHANGED || pHdr->code == HDN_ENDDRAG) && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(GetDlgItem(hWnd, IDC_TAB), IDC_GRID)))
+				PostMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
 				
 			if (pHdr->code == (UINT)NM_SETFOCUS) 
 				SetProp(hWnd, TEXT("LASTFOCUS"), pHdr->hwndFrom);
@@ -1706,12 +1713,19 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			HWND hHeader = ListView_GetHeader(hGridWnd);
 			int colCount = Header_GetItemCount(hHeader);
 			SendMessage(hHeader, WM_SIZE, 0, 0);
-			for (int colNo = 0; colNo < colCount; colNo++) {
+			
+			int* colOrder = calloc(colCount, sizeof(int));
+			Header_GetOrderArray(hHeader, colCount, colOrder);
+
+			for (int idx = 0; idx < colCount; idx++) {
+				int colNo = colOrder[idx];
 				RECT rc;
 				Header_GetItemRect(hHeader, colNo, &rc);
 				int h2 = round((rc.bottom - rc.top) / 2);
 				SetWindowPos(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), 0, rc.left, h2, rc.right - rc.left, h2 + 1, SWP_NOZORDER);
 			}
+
+			free(colOrder);
 		}
 		break;
 		
