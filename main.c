@@ -68,7 +68,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("1.0.6")
+#define APP_VERSION            TEXT("1.0.7")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -1915,7 +1915,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			*pFontSize += wParam;
 			DeleteFont(GetProp(hWnd, TEXT("FONT")));
 
-			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, (TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));
+			int weight = getStoredValue(TEXT("font-weight"), 0);
+			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, weight < 0 || weight > 9 ? FW_DONTCARE : weight * 100, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, (TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));
 			HWND hTreeWnd = GetDlgItem(hWnd, IDC_TREE);
 			HWND hTabWnd = GetDlgItem(hWnd, IDC_TAB);
 			HWND hGridWnd = GetDlgItem(hTabWnd, IDC_GRID);
@@ -2296,7 +2297,8 @@ void highlightText (HWND hWnd, TCHAR* text) {
 	COLORREF stringColor = *(int*)GetProp(hMainWnd, TEXT("XMLSTRINGCOLOR"));	
 	COLORREF valueColor = *(int*)GetProp(hMainWnd, TEXT("XMLVALUECOLOR"));	
 	COLORREF cdataColor = *(int*)GetProp(hMainWnd, TEXT("XMLCDATACOLOR"));		
-	COLORREF commentColor = *(int*)GetProp(hMainWnd, TEXT("XMLCOMMENTCOLOR"));			
+	COLORREF commentColor = *(int*)GetProp(hMainWnd, TEXT("XMLCOMMENTCOLOR"));
+	BOOL useBold = getStoredValue(TEXT("font-use-bold"), 0);
 	
 	CHARFORMAT2 cf2 = {0};
 	cf2.cbSize = sizeof(CHARFORMAT2) ;
@@ -2334,14 +2336,14 @@ void highlightText (HWND hWnd, TCHAR* text) {
 			if (p != NULL) {
 				pos = p - text; 
 				cf2.crTextColor = tagColor;
-				cf2.dwEffects = CFM_BOLD;
+				cf2.dwEffects = useBold ? CFM_BOLD : 0;
 			}
 		} else if (c == TEXT('>')) {
 			if (pos > 0 && text[pos - 1] == TEXT('/'))
 				start--;
 
 			cf2.crTextColor = tagColor;
-			cf2.dwEffects = CFM_BOLD;
+			cf2.dwEffects = useBold ? CFM_BOLD : 0;
 		} else if (pos > 0 && text[pos - 1] == TEXT('>')) {
 			TCHAR* p = _tcschr(text + pos + 1, TEXT('<'));
 			if (p != NULL) {
