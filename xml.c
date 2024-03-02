@@ -748,10 +748,13 @@ struct xml_element *xml_find_element(
 		const char *key) {
 	xml_element* s = e ? e->first_child : NULL;
 	for (; s; s = s->next) {
+		if (!s->key || !key){
+			continue;
+		}
 		if (!strcasecmp(s->key, key)) {
 			return s;
 		}
-	}	
+	}
 
 	return NULL;
 }
@@ -771,6 +774,9 @@ struct xml_attribute *xml_find_attribute(
 		const char *key) {
 	xml_attribute* a = e ? e->first_attribute : NULL;	
 	for (; a; a = a->next) {
+		if (!a->key || !key){
+			continue;
+		}
 		if (!strcasecmp(a->key, key)) {
 			return a;
 		}
