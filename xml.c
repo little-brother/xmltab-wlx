@@ -73,6 +73,7 @@ static size_t xml_quotedspn(const char *s, char q) {
 }
 
 #ifdef WIN32
+#include <errno.h>
 /**
  * Copies n bytes of given string
  *
@@ -80,13 +81,19 @@ static size_t xml_quotedspn(const char *s, char q) {
  * @param n - number of bytes
  */
 static char *strndup(const char *s, size_t n) {
-	char *r;
-
-	if (!(r = calloc(n + 1, sizeof(char))) ||
-			!memcpy(r, s, n)) {
+	if (!s || !n){
+		errno = EINVAL;
 		return NULL;
 	}
 
+	char *r;
+	r = calloc(n + 1, sizeof(*r));
+	if (!r) return NULL;
+
+	if ( r != memcpy(r, s, n)) {
+		free(r);
+		return NULL;
+	}
 	return r;
 }
 #endif
