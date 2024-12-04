@@ -68,7 +68,7 @@
 #define MAX_LENGTH             4096
 #define MAX_COLUMN_LENGTH      2000
 #define APP_NAME               TEXT("xmltab")
-#define APP_VERSION            TEXT("1.0.7")
+#define APP_VERSION            TEXT("1.0.8")
 #define LOADING                TEXT("Loading...")
 #define WHITESPACE             " \t\r\n"
 
@@ -1370,8 +1370,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				
 				subnode = template->first_child;
 				while (subnode) {
-					if (subnode->key && strlen(subnode->key) > 0) {
-										
+					if (subnode->key && strlen(subnode->key) > 0) {			
 						TCHAR* colName16 = utf8to16(subnode->key);
 						ListView_AddColumn(hGridWnd, colName16);
 						free(colName16);					
@@ -1448,7 +1447,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					
 					if (isShowContent) {
 						char* content = subnode ? xml_content(subnode): calloc(1, sizeof(char));
-						cache[rowNo][colNo] = utf8to16(subnode && !isEmpty(content) ? content : "");										
+						cache[rowNo][colNo] = utf8to16(subnode && !isEmpty(content) ? content : "");
 						free(content);
 					}
 										
@@ -1468,7 +1467,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					cache[rowNo][0] = utf8to16(buf8);
 					free(buf8);
 					cache[rowNo][1] = utf8to16(attr->value);
-	
+
 					rowNo++;				
 					attr = attr->next;
 				}

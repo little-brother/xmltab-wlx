@@ -793,7 +793,7 @@ static size_t xml_content_len(struct xml_element *e) {
 
 	for (e = e->first_child; e; e = e->next) {
 		if (e->value) {
-			s += strlen(e->value) + 1; // space
+			s += strlen(e->value) + (e->next != NULL); // space
 		} else {
 			s += xml_content_len(e);
 		}
@@ -820,8 +820,10 @@ static void xml_content_cpy(struct xml_element *e, char **t) {
 			if (len) {	
 				strncpy(*t, e->value + start, len);
 				*t += len;
-				**t = ' ';
-				*t += 1; 
+				if (e->next) {	
+					**t = ' ';
+					*t += 1; 
+				}
 			}
 		} else {
 			xml_content_cpy(e, t);
