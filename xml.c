@@ -73,6 +73,7 @@ static size_t xml_quotedspn(const char *s, char q) {
 }
 
 #ifdef WIN32
+#include <errno.h>
 /**
  * Copies n bytes of given string
  *
@@ -80,13 +81,19 @@ static size_t xml_quotedspn(const char *s, char q) {
  * @param n - number of bytes
  */
 static char *strndup(const char *s, size_t n) {
-	char *r;
-
-	if (!(r = calloc(n + 1, sizeof(char))) ||
-			!memcpy(r, s, n)) {
+	if (!s || !n){
+		errno = EINVAL;
 		return NULL;
 	}
 
+	char *r;
+	r = calloc(n + 1, sizeof(*r));
+	if (!r) return NULL;
+
+	if ( r != memcpy(r, s, n)) {
+		free(r);
+		return NULL;
+	}
 	return r;
 }
 #endif
@@ -748,10 +755,13 @@ struct xml_element *xml_find_element(
 		const char *key) {
 	xml_element* s = e ? e->first_child : NULL;
 	for (; s; s = s->next) {
+		if (!s->key || !key){
+			continue;
+		}
 		if (!strcasecmp(s->key, key)) {
 			return s;
 		}
-	}	
+	}
 
 	return NULL;
 }
@@ -771,6 +781,9 @@ struct xml_attribute *xml_find_attribute(
 		const char *key) {
 	xml_attribute* a = e ? e->first_attribute : NULL;	
 	for (; a; a = a->next) {
+		if (!a->key || !key){
+			continue;
+		}
 		if (!strcasecmp(a->key, key)) {
 			return a;
 		}
